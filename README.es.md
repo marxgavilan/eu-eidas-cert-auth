@@ -25,9 +25,9 @@ La TSL suelta se importa con `TrustListImporter::importTsl($xml, 'ES', $huellasF
 
 ## Validación e identidad
 
-`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate` y `revocationSource`. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, keyUsage de firma digital, EKU de autenticación cliente, declaración ETSI QcCompliance (por defecto), país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
+`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate` y `revocationSource`. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, keyUsage de firma digital, EKU de autenticación cliente cuando existe, política de cualificación, país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
 
-Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-` y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador debe vincular usuarios por `(scheme, country, value)` y comprobar el tipo de persona, no solo el valor.
+Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-`, un DNI/NIE sin prefijo en `serialNumber` con letra de control válida y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador debe vincular usuarios por `(scheme, country, value)` y comprobar el tipo de persona, no solo el valor.
 
 ```php
 use Iberfacil\EidasCertAuth\Options;
@@ -41,6 +41,14 @@ $preview = $importer->importLotl(dryRun: true);
 ```
 
 Para construir el validador sin Laravel, consulte el ejemplo completo del [README en inglés](README.md#client-validation-and-identity). `FakeTransport` permite pruebas sin red.
+
+### Autenticación con DNIe
+
+La [Declaración de Prácticas de Certificación de la Policía, versión 3.2, apartados 7.1.4 y 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) especifica para el certificado de autenticación el OID `2.16.724.1.2.2.2.4` (con posible sufijo de dos números de versión), `digitalSignature`, ausencia de EKU, DNI/NIE sin prefijo en `serialNumber` y una URL AIA de la CA emisora. `authenticationPolicies` vale por defecto `['ES' => ['2.16.724.1.2.2.2.4']]`; para otros países no hay políticas configuradas. Puede cambiar la lista por país con `new Options(authenticationPolicies: ['ES' => ['2.16.724.1.2.2.2.4']])` o mediante `authentication_policies` en Laravel. Una lista vacía desactiva esta excepción para ese país. Revise los OID y países aceptados con el responsable de la aplicación.
+
+`requireQualified` sigue en `true`. Un certificado sin QcCompliance solo pasa si lleva la política configurada, tiene `digitalSignature` y su cadena verificada llega a una entrada actual CA/QC del mismo país con `ForeSignatures` en la TSL. Se siguen aplicando los criterios `NotQualified`/`QCForLegalPerson` de la TSL. Si hay EKU, debe incluir `clientAuth`; si no lo hay, no impone otra restricción. Los certificados fuera de esta política siguen necesitando QcCompliance. Para DNIe no desactive `requireQualified` de forma global.
+
+Normalmente nginx solo entrega la hoja; `AC DNIE 00x` puede obtenerse desde AIA `caIssuers` por HTTP/HTTPS. Se emplea el transporte protegido usado para revocación (sin redirecciones, bloqueo de destinos privados/reservados, IP fijada, límites de tamaño y tiempo), con límite de 1 MB para la respuesta de certificado y caché de una hora por instancia del validador. La intermedia descargada debe encadenar criptográficamente hasta el ancla TSL. Alternativamente, cargue certificados PEM por `new CertificateValidator(..., intermediates: [$issuerPem])` o el array Laravel `intermediates`. Si el almacén se creó antes de esta versión, actualícelo desde las listas firmadas para registrar `ForeSignatures`. Pruebe el flujo con un DNIe real y el proxy TLS de su aplicación; los tests generan una PKI que reproduce el perfil documentado.
 
 ## Terminación TLS con `optional_no_ca`
 
@@ -77,7 +85,7 @@ Con PHP-FPM hay que configurar y comprobar la transferencia explícita de la var
 
 ## Laravel
 
-El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluidos `revocation_cache_store`, `intermediates` y `maximum_store_age_seconds`. Laravel usa su caché para los resultados de revocación. `schedule_daily=true` programa el comando a diario por defecto; póngalo a `false` si la aplicación programa las actualizaciones por su cuenta. La aplicación necesita activar su disparador habitual del scheduler.
+El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluidos `authentication_policies`, `revocation_cache_store`, `intermediates` y `maximum_store_age_seconds`. Laravel usa su caché para los resultados de revocación. `schedule_daily=true` programa el comando a diario por defecto; póngalo a `false` si la aplicación programa las actualizaciones por su cuenta. La aplicación necesita activar su disparador habitual del scheduler.
 
 ```bash
 php artisan eidas:trust-list:update --dry-run
