@@ -1,6 +1,6 @@
 # Security policy
 
-Please report security issues privately through GitHub Security Advisories for this repository. Include a reproducible description and affected version. Do not attach real private keys, certificates, identity data or production URLs.
+Please report security issues privately through [GitHub Security Advisories for eu-eidas-cert-auth](https://github.com/marxgavilan/eu-eidas-cert-auth/security/advisories). Include a reproducible description and affected version. Do not attach real private keys, certificates, identity data or production URLs.
 
 The trust chain begins with signer fingerprints published in the EU Official Journal. Review changes to that publication and the pivot mechanism before updating pins. Invalid signatures, unknown signers, expired lists and empty imports reject without changing the live store. `--force` only bypasses the CA count guard.
 

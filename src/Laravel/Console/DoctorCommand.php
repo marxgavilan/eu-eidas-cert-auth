@@ -9,6 +9,7 @@ use Iberfacil\EidasCertAuth\Trust\TrustStore;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Config;
 use InvalidArgumentException;
+use Throwable;
 
 final class DoctorCommand extends Command
 {
@@ -21,7 +22,10 @@ final class DoctorCommand extends Command
         try {
             $this->laravel->make(Options::class);
             $store = $this->laravel->make(TrustStore::class);
-        } catch (InvalidArgumentException $exception) {
+        } catch (Throwable $exception) {
+            if (! $exception instanceof InvalidArgumentException) {
+                throw $exception;
+            }
             $this->error($exception->getMessage());
 
             return self::FAILURE;

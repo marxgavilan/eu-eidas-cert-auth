@@ -2,6 +2,13 @@
 
 All notable changes are recorded here. This project follows semantic versioning and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-09-29
+
+### Changed
+
+- Renamed the repository to `eu-eidas-cert-auth` and updated its documentation and links. The Composer package remains `iberfacil/eidas-cert-auth`.
+- Made the Laravel doctor command's configuration error handling compatible with PHPStan on PHP 8.2–8.4.
+
 ## [0.1.0] - 2026-09-29
 
 ### Added

@@ -19,6 +19,7 @@ use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Facade;
 use PHPUnit\Framework\TestCase;
+use RuntimeException;
 use Symfony\Component\Console\Input\ArrayInput;
 use Symfony\Component\Console\Output\BufferedOutput;
 
@@ -109,6 +110,29 @@ final class LaravelCommandTest extends TestCase
             }
             rmdir($dir);
         }
+    }
+
+    public function testDoctorCommandReportsInvalidOptions(): void
+    {
+        $app = $this->createMock(Application::class);
+        $app->method('make')->willReturnCallback(static fn(string $abstract): mixed => $abstract === Options::class ? new Options(region: 'invalid') : null);
+        $command = new DoctorCommand();
+        $command->setLaravel($app);
+        $this->setIo($command);
+
+        self::assertSame(Command::FAILURE, $command->handle());
+    }
+
+    public function testDoctorCommandPropagatesUnexpectedFailures(): void
+    {
+        $app = $this->createMock(Application::class);
+        $app->method('make')->willThrowException(new RuntimeException('Container failed.'));
+        $command = new DoctorCommand();
+        $command->setLaravel($app);
+        $this->setIo($command);
+
+        $this->expectException(RuntimeException::class);
+        $command->handle();
     }
 
     /** @param array<string, bool> $options */

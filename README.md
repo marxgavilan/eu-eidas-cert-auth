@@ -1,6 +1,6 @@
-# eidas-cert-auth
+# eu-eidas-cert-auth
 
-[![CI](https://github.com/marxgavilan/eidas-cert-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/marxgavilan/eidas-cert-auth/actions/workflows/ci.yml) [![Packagist](https://img.shields.io/packagist/v/iberfacil/eidas-cert-auth.svg)](https://packagist.org/packages/iberfacil/eidas-cert-auth) [![PHP](https://img.shields.io/packagist/php-v/iberfacil/eidas-cert-auth.svg)](https://packagist.org/packages/iberfacil/eidas-cert-auth) [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/marxgavilan/eu-eidas-cert-auth/actions/workflows/ci.yml/badge.svg)](https://github.com/marxgavilan/eu-eidas-cert-auth/actions/workflows/ci.yml) [![Packagist](https://img.shields.io/packagist/v/iberfacil/eidas-cert-auth.svg)](https://packagist.org/packages/iberfacil/eidas-cert-auth) [![PHP](https://img.shields.io/packagist/php-v/iberfacil/eidas-cert-auth.svg)](https://packagist.org/packages/iberfacil/eidas-cert-auth) [![Licencia MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
 
 Permite que la gente entre en tu web o aplicación con su certificado digital —FNMT, DNIe o de cualquier prestador cualificado de la UE— comprobando de verdad que es válido, procede de una autoridad de confianza oficial y no está revocado. Sin framework, con línea de comandos y adaptador opcional para Laravel.
 

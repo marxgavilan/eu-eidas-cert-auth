@@ -3,7 +3,7 @@
     "description": "Autentica en PHP con certificados eIDAS (FNMT, DNIe y UE), listas de confianza firmadas y revocación. CLI y Laravel.",
     "type": "library",
     "license": "MIT",
-    "homepage": "https://github.com/marxgavilan/eidas-cert-auth",
+    "homepage": "https://github.com/marxgavilan/eu-eidas-cert-auth",
     "keywords": [
         "eidas",
         "tsl",
@@ -27,9 +27,9 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/marxgavilan/eidas-cert-auth/issues",
-        "source": "https://github.com/marxgavilan/eidas-cert-auth",
-        "security": "https://github.com/marxgavilan/eidas-cert-auth/security/policy"
+        "issues": "https://github.com/marxgavilan/eu-eidas-cert-auth/issues",
+        "source": "https://github.com/marxgavilan/eu-eidas-cert-auth",
+        "security": "https://github.com/marxgavilan/eu-eidas-cert-auth/security/policy"
     },
     "require": {
         "php": "^8.2",

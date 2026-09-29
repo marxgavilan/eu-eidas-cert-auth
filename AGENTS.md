@@ -1,6 +1,6 @@
-# Agent integration guide
+# eu-eidas-cert-auth agent integration guide
 
-This package validates client certificates against signed eIDAS trusted lists. The framework-free core is in `src/`; Laravel support is in `src/Laravel/`.
+The `iberfacil/eidas-cert-auth` package validates client certificates against signed eIDAS trusted lists. Its repository is [eu-eidas-cert-auth](https://github.com/marxgavilan/eu-eidas-cert-auth). The framework-free core is in `src/`; Laravel support is in `src/Laravel/`.
 
 1. Install the package and publish Laravel configuration only if needed.
 2. Set a private, writable `store_path` whose parent exists; the live store path must be absent or a symlink.
