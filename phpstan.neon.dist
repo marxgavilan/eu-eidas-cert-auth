@@ -1,0 +1,7 @@
+parameters:
+    level: 8
+    paths:
+        - src
+        - tests
+        - bin/eidas-cert-auth
+    treatPhpDocTypesAsCertain: false

@@ -1,0 +1,42 @@
+{
+  "name": "iberfacil/eidas-cert-auth",
+  "description": "Framework-free eIDAS certificate authentication and signed trusted-list import with an optional Laravel adapter.",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": "^8.2",
+    "ext-curl": "*",
+    "ext-dom": "*",
+    "ext-libxml": "*",
+    "ext-openssl": "*",
+        "robrichards/xmlseclibs": "^3.1.5"
+  },
+  "require-dev": {
+    "illuminate/console": "^11.0 || ^12.0 || ^13.0",
+    "illuminate/contracts": "^11.0 || ^12.0 || ^13.0",
+    "illuminate/http": "^11.0 || ^12.0 || ^13.0",
+    "illuminate/support": "^11.0 || ^12.0 || ^13.0",
+    "laravel/pint": "^1.20",
+    "phpstan/phpstan": "^2.1",
+    "phpunit/phpunit": "^11.5",
+    "symfony/http-kernel": "^7.0 || ^8.0"
+  },
+  "suggest": {
+    "illuminate/support": "Laravel service provider, middleware and commands.",
+    "illuminate/console": "Laravel Artisan commands."
+  },
+  "autoload": {"psr-4": {"Iberfacil\\EidasCertAuth\\": "src/"}},
+  "autoload-dev": {"psr-4": {"Iberfacil\\EidasCertAuth\\Tests\\": "tests/"}},
+  "bin": ["bin/eidas-cert-auth"],
+  "scripts": {
+    "test": "phpunit",
+    "analyse": "phpstan analyse --memory-limit=512M",
+    "format": "pint",
+    "format:check": "pint --test",
+    "check": ["@format:check", "@analyse", "@test"]
+  },
+  "extra": {"laravel": {"providers": ["Iberfacil\\EidasCertAuth\\Laravel\\EidasCertAuthServiceProvider"], "aliases": {"EidasCertAuth": "Iberfacil\\EidasCertAuth\\Laravel\\Facades\\EidasCertAuth"}}},
+  "config": {"sort-packages": true, "allow-plugins": false},
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}
