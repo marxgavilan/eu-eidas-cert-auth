@@ -10,12 +10,39 @@ use Iberfacil\EidasCertAuth\Contracts\RevocationCache;
 use Iberfacil\EidasCertAuth\Laravel\EidasCertAuthServiceProvider;
 use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
+use Illuminate\Console\Scheduling\Event;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Foundation\CachesConfiguration;
 use PHPUnit\Framework\TestCase;
 
 final class LaravelWiringTest extends TestCase
 {
+    public function testDailyScheduleAndThirtyDayStoreAgeAreDefaults(): void
+    {
+        self::assertSame(2592000, (new Options())->maximumStoreAgeSeconds);
+        $configRepository = new class {
+            public function get(string $key, mixed $default = null): mixed
+            {
+                return $default;
+            }
+        };
+        $callback = null;
+        $app = $this->createMock(Application::class);
+        $app->method('runningInConsole')->willReturn(false);
+        $app->method('make')->with('config')->willReturn($configRepository);
+        $app->expects(self::once())->method('afterResolving')->with(Schedule::class, self::isInstanceOf(\Closure::class))->willReturnCallback(static function (string $abstract, \Closure $resolver) use (&$callback): void {
+            $callback = $resolver;
+        });
+        (new EidasCertAuthServiceProvider($app))->boot();
+        self::assertInstanceOf(\Closure::class, $callback);
+        $event = $this->createMock(Event::class);
+        $event->expects(self::once())->method('daily');
+        $schedule = $this->createMock(Schedule::class);
+        $schedule->expects(self::once())->method('command')->with('eidas:trust-list:update')->willReturn($event);
+        $callback($schedule);
+    }
+
     public function testProviderPassesSecurityOptionsAndIntermediatesToValidator(): void
     {
         $values = [

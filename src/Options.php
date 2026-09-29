@@ -35,7 +35,7 @@ final readonly class Options
         public bool $requireQualified = true,
         public bool $softFailRevocation = false,
         public bool $requireForeSignatures = true,
-        public int $maximumStoreAgeSeconds = 604800,
+        public int $maximumStoreAgeSeconds = 2592000,
     ) {
         if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1) {
             throw new InvalidArgumentException('Invalid eIDAS options.');

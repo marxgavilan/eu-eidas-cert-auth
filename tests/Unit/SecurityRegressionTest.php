@@ -222,6 +222,23 @@ final class SecurityRegressionTest extends TestCase
         $store->publish($esEntry);
     }
 
+    public function testDefaultStoreAgeAllowsEightDaysButRejectsThirtyOne(): void
+    {
+        $pki = new TestPki();
+        $ca = $pki->issue(['CN' => 'CA'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([self::fingerprint($ca['pem']) => ['pem' => $ca['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $manifestPath = $store->path . '/manifest.json';
+        $manifest = json_decode((string) file_get_contents($manifestPath), true);
+        self::assertGreaterThan(time() + 29 * 86400, strtotime($manifest['next_update']));
+        $manifest['generated_at'] = (new DateTimeImmutable('-8 days'))->format(DATE_ATOM);
+        file_put_contents($manifestPath, json_encode($manifest));
+        self::assertCount(1, $store->certificates());
+        $manifest['generated_at'] = (new DateTimeImmutable('-31 days'))->format(DATE_ATOM);
+        file_put_contents($manifestPath, json_encode($manifest));
+        self::assertSame([], $store->certificates());
+    }
+
     public function testDoctypeOversizeAndSignatureStructuralChangesAreRejected(): void
     {
         $pki = new TestPki();

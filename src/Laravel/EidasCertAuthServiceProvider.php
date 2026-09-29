@@ -39,7 +39,7 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
                 requireQualified: (bool) $config->get('eidas-cert-auth.require_qualified', true),
                 softFailRevocation: (bool) $config->get('eidas-cert-auth.soft_fail_revocation', false),
                 requireForeSignatures: (bool) $config->get('eidas-cert-auth.require_fore_signatures', true),
-                maximumStoreAgeSeconds: (int) $config->get('eidas-cert-auth.maximum_store_age_seconds', 604800),
+                maximumStoreAgeSeconds: (int) $config->get('eidas-cert-auth.maximum_store_age_seconds', 2592000),
             );
         });
         $this->app->singleton(TrustStore::class, static fn(Application $app): TrustStore => new TrustStore((string) $app->make('config')->get('eidas-cert-auth.store_path'), $app->make(Options::class)->minimumRetentionPercent, $app->make(Options::class)->maximumStoreAgeSeconds));
@@ -61,9 +61,9 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
             $this->publishes([__DIR__ . '/../../config/eidas-cert-auth.php' => $this->app->configPath('eidas-cert-auth.php')], 'eidas-cert-auth-config');
             $this->commands([TrustListUpdateCommand::class, DoctorCommand::class]);
         }
-        if ((bool) $this->app->make('config')->get('eidas-cert-auth.schedule_weekly', false)) {
+        if ((bool) $this->app->make('config')->get('eidas-cert-auth.schedule_daily', true)) {
             $this->app->afterResolving(Schedule::class, static function (Schedule $schedule): void {
-                $schedule->command('eidas:trust-list:update')->weekly();
+                $schedule->command('eidas:trust-list:update')->daily();
             });
         }
     }

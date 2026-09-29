@@ -33,7 +33,9 @@ final class CurlTransportPolicyTest extends TestCase
             }
         }
         self::assertSame(12, $rejected);
-    }    public function testRedirectResponseIsRejectedWithoutFollowingIt(): void
+    }
+
+    public function testRedirectResponseIsRejectedWithoutFollowingIt(): void
     {
         CurlStubState::$simulateRedirect = true;
         CurlStubState::$followLocation = null;
