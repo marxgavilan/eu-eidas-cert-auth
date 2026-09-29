@@ -174,4 +174,52 @@ final class CertificateValidatorTest extends TestCase
         self::assertSame('untrusted', $validator->validate($client['pem'])->reason);
     }
 
+    public function testDnieAuthenticationPolicyAiaPurposeAndIdentity(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'AC RAIZ DNIE 2', 'C' => 'ES'], profile: 'ca');
+        $intermediate = $pki->issue(['CN' => 'AC DNIE 004', 'C' => 'ES'], $root, 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $transport = (new FakeTransport())->respond('http://aia.example.test/issuer.crt', TestPki::der($intermediate['pem']));
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(authenticationPolicies: ['ES' => ['2.16.724.1.2.2.2.4']]), aiaTransport: $transport);
+        $subject = ['CN' => 'Example (AUTENTICACION)', 'serialNumber' => '12345678Z', 'C' => 'ES'];
+
+        foreach (['dnie_auth' => true, 'dnie_no_eku' => true, 'dnie_versioned' => true, 'dnie_wrong_policy' => false, 'dnie_wrong_eku' => false, 'dnie_bad_ku' => false] as $profile => $expected) {
+            $client = $pki->issue($subject, $intermediate, $profile);
+            $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $intermediate));
+            $result = $validator->validate($client['pem']);
+            self::assertSame($expected, $result->valid, $profile . ': ' . $result->reason);
+            if ($expected) {
+                self::assertSame('12345678Z', $result->identity?->identifier);
+            } else {
+                self::assertSame($profile === 'dnie_wrong_policy' ? 'not_qualified' : 'not_for_authentication', $result->reason);
+            }
+        }
+        self::assertCount(1, array_filter($transport->sent, static fn(array $request): bool => $request['url'] === 'http://aia.example.test/issuer.crt'));
+
+        $badSerial = $pki->issue(['CN' => 'Example', 'serialNumber' => '12345678A', 'C' => 'ES'], $intermediate, 'dnie_auth');
+        $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($badSerial['pem'], $intermediate));
+        self::assertSame('no_personal_identity', $validator->validate($badSerial['pem'])->reason);
+
+        $otherRoot = $pki->issue(['CN' => 'Other Root', 'C' => 'ES'], profile: 'ca');
+        $otherIntermediate = $pki->issue(['CN' => 'Other Intermediate', 'C' => 'ES'], $otherRoot, 'ca');
+        $otherClient = $pki->issue($subject, $otherIntermediate, 'dnie_auth');
+        $otherTransport = (new FakeTransport())->respond('http://aia.example.test/issuer.crt', TestPki::der($otherIntermediate['pem']));
+        $untrusted = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($otherTransport, new InMemoryRevocationCache()), new Options(), aiaTransport: $otherTransport);
+        self::assertSame('untrusted', $untrusted->validate($otherClient['pem'])->reason);
+
+        $configured = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), intermediates: [$intermediate['pem']], aiaTransport: new FakeTransport());
+        $client = $pki->issue($subject, $intermediate, 'dnie_auth');
+        $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $intermediate));
+        self::assertTrue($configured->validate($client['pem'])->valid);
+        $disabled = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(authenticationPolicies: ['ES' => []]), intermediates: [$intermediate['pem']]);
+        self::assertSame('not_qualified', $disabled->validate($client['pem'])->reason);
+
+        $noForeStore = new TrustStore($this->dir . '/trust');
+        $noForeStore->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => false]], force: true);
+        $noFore = new CertificateValidator(new CertificateParser(), $noForeStore, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), intermediates: [$intermediate['pem']]);
+        self::assertSame('not_qualified', $noFore->validate($client['pem'])->reason);
+    }
+
 }

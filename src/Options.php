@@ -20,10 +20,13 @@ final readonly class Options
         'd2064fdd70f6982dcc516b86d9d5c56aea939417c624b2e478c0b29de54f8474',
     ];
 
+    public const DEFAULT_AUTHENTICATION_POLICIES = ['ES' => ['2.16.724.1.2.2.2.4']];
+
     /**
      * @param list<string> $countries
      * @param list<string> $serviceTypes
      * @param list<string> $lotlSignerFingerprints
+     * @param array<string, list<string>> $authenticationPolicies
      */
     public function __construct(
         public string $region = 'ES',
@@ -36,6 +39,7 @@ final readonly class Options
         public bool $softFailRevocation = false,
         public bool $requireForeSignatures = true,
         public int $maximumStoreAgeSeconds = 2592000,
+        public array $authenticationPolicies = self::DEFAULT_AUTHENTICATION_POLICIES,
     ) {
         if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1) {
             throw new InvalidArgumentException('Invalid eIDAS options.');
@@ -46,6 +50,16 @@ final readonly class Options
                 throw new InvalidArgumentException('Invalid accepted country.');
             }
             $seen[$country] = true;
+        }
+        foreach ($authenticationPolicies as $country => $policies) {
+            if (! is_string($country) || ! preg_match('/^[A-Z]{2}$/', $country) || ! is_array($policies) || ! array_is_list($policies)) {
+                throw new InvalidArgumentException('Invalid authentication policies.');
+            }
+            foreach ($policies as $oid) {
+                if (! is_string($oid) || ! preg_match('/^\d+(?:\.\d+)+$/D', $oid)) {
+                    throw new InvalidArgumentException('Invalid authentication policy OID.');
+                }
+            }
         }
     }
 

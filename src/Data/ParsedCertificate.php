@@ -13,6 +13,7 @@ final readonly class ParsedCertificate
      * @param array<string, mixed> $issuer
      * @param list<string> $ocspUrls
      * @param list<string> $crlUrls
+     * @param list<string> $caIssuerUrls
      */
     public function __construct(
         public string $pem,
@@ -26,5 +27,6 @@ final readonly class ParsedCertificate
         public bool $qualified,
         public array $ocspUrls,
         public array $crlUrls,
+        public array $caIssuerUrls = [],
     ) {}
 }

@@ -44,6 +44,7 @@ final class CertificateParser
             $qualified,
             self::urls((string) ($extensions['authorityInfoAccess'] ?? ''), 'OCSP - URI:'),
             self::urls((string) ($extensions['crlDistributionPoints'] ?? ''), 'URI:'),
+            self::urls((string) ($extensions['authorityInfoAccess'] ?? ''), 'CA Issuers - URI:'),
         );
     }
 

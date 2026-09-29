@@ -40,6 +40,7 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
                 softFailRevocation: (bool) $config->get('eidas-cert-auth.soft_fail_revocation', false),
                 requireForeSignatures: (bool) $config->get('eidas-cert-auth.require_fore_signatures', true),
                 maximumStoreAgeSeconds: (int) $config->get('eidas-cert-auth.maximum_store_age_seconds', 2592000),
+                authenticationPolicies: (array) $config->get('eidas-cert-auth.authentication_policies', Options::DEFAULT_AUTHENTICATION_POLICIES),
             );
         });
         $this->app->singleton(TrustStore::class, static fn(Application $app): TrustStore => new TrustStore((string) $app->make('config')->get('eidas-cert-auth.store_path'), $app->make(Options::class)->minimumRetentionPercent, $app->make(Options::class)->maximumStoreAgeSeconds));

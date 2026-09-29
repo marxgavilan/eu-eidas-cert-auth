@@ -20,7 +20,12 @@ final class SpanishIdentityExtractor extends GenericIdentityExtractor
         $cn = strtoupper(self::field($certificate->subject, ['CN', 'commonName']) ?? '');
         $identifier = $base->identifier;
         $organizationIdentifier = $base->organizationIdentifier;
-        if ($identifier === null && preg_match('/\b(?:[0-9]{8}|[XYZ][0-9]{7})[A-Z]\b/', $cn, $match)) {
+        $serial = strtoupper(self::field($certificate->subject, ['serialNumber']) ?? '');
+        $bareSerial = preg_match('/^(?:[0-9]{8}|[XYZ][0-9]{7})[A-Z]$/D', $serial) === 1;
+        if ($identifier === null && $bareSerial && self::validDni($serial)) {
+            $identifier = $serial;
+        }
+        if ($identifier === null && ! $bareSerial && preg_match('/\b(?:[0-9]{8}|[XYZ][0-9]{7})[A-Z]\b/', $cn, $match)) {
             if (self::validDni($match[0])) {
                 $identifier = $match[0];
             }

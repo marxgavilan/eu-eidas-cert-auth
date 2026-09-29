@@ -89,7 +89,7 @@ final readonly class TrustListImporter
         return $this->store->publish($this->extract($document, $country, $at), $force, $dryRun, [$country => $this->sequence($document)], $next, [$country => $this->issueDate($document)]);
     }
 
-    /** @return array<string, array{pem: string, country: string, service: string, not_qualified_criteria: list<string>}> */
+    /** @return array<string, array{pem: string, country: string, service: string, fore_signatures: bool, not_qualified_criteria: list<string>}> */
     private function extract(DOMDocument $document, string $country, DateTimeImmutable $at): array
     {
         $xpath = self::xpath($document);
@@ -104,7 +104,8 @@ final readonly class TrustListImporter
                 continue;
             }
             $type = trim((string) $xpath->evaluate('string(./tsl:ServiceTypeIdentifier[1])', $info));
-            if (! in_array($type, $this->options->serviceTypes, true) || ! $this->isGranted($xpath, $service, $at) || ! $this->hasForeSignatures($xpath, $info)) {
+            $foreSignatures = $this->hasForeSignatures($xpath, $info);
+            if (! in_array($type, $this->options->serviceTypes, true) || ! $this->isGranted($xpath, $service, $at) || ($this->options->requireForeSignatures && ! $foreSignatures)) {
                 continue;
             }
             foreach ($xpath->query('./tsl:ServiceDigitalIdentity/tsl:DigitalId/tsl:X509Certificate', $info) ?: [] as $node) {
@@ -120,7 +121,7 @@ final readonly class TrustListImporter
                 if (! is_array($details) || ! str_contains((string) ($details['extensions']['basicConstraints'] ?? ''), 'CA:TRUE')) {
                     continue;
                 }
-                $result[hash('sha256', $der)] = ['pem' => $pem, 'country' => $country, 'service' => $type, 'not_qualified_criteria' => $this->notQualifiedCriteria($xpath, $info)];
+                $result[hash('sha256', $der)] = ['pem' => $pem, 'country' => $country, 'service' => $type, 'fore_signatures' => $foreSignatures, 'not_qualified_criteria' => $this->notQualifiedCriteria($xpath, $info)];
             }
         }
 
@@ -166,7 +167,7 @@ final readonly class TrustListImporter
             }
         }
 
-        return ! $this->options->requireForeSignatures || $fore;
+        return $fore;
     }
 
     private function isGranted(DOMXPath $xpath, DOMElement $service, DateTimeImmutable $at): bool

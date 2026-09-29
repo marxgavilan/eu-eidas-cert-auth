@@ -35,6 +35,15 @@ final class TestPki
         $text .= "[client_fake_qc]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n1.3.6.1.5.5.7.1.3=DER:30:0a:04:08:06:06:04:00:8e:46:01:01\n";
         $text .= "[client_no_qc]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nauthorityInfoAccess=OCSP;URI:http://ocsp.example.test/response\n";
         $text .= "[client_no_auth]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,nonRepudiation\nextendedKeyUsage=emailProtection\n";
+        foreach (['dnie_auth' => 'extendedKeyUsage=clientAuth', 'dnie_no_eku' => '', 'dnie_wrong_eku' => 'extendedKeyUsage=emailProtection', 'dnie_wrong_policy' => 'extendedKeyUsage=clientAuth', 'dnie_bad_ku' => 'extendedKeyUsage=clientAuth', 'dnie_versioned' => 'extendedKeyUsage=clientAuth'] as $profileName => $eku) {
+            $policy = match ($profileName) {
+                'dnie_wrong_policy' => '2.16.724.1.2.2.2.3',
+                'dnie_versioned' => '2.16.724.1.2.2.2.4.3.2',
+                default => '2.16.724.1.2.2.2.4',
+            };
+            $ku = $profileName === 'dnie_bad_ku' ? 'nonRepudiation' : 'digitalSignature';
+            $text .= "[{$profileName}]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,{$ku}\n{$eku}\ncertificatePolicies={$policy}\nauthorityInfoAccess=OCSP;URI:http://ocsp.example.test/response,caIssuers;URI:http://aia.example.test/issuer.crt\n";
+        }
         file_put_contents($config, $text);
         try {
             $csr = openssl_csr_new($subject, $key, ['config' => $config, 'digest_alg' => 'sha256']);

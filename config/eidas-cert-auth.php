@@ -13,6 +13,7 @@ return [
     'minimum_retention_percent' => (int) env('EIDAS_MINIMUM_RETENTION', 80),
     'timeout_seconds' => (int) env('EIDAS_TIMEOUT', 15),
     'require_qualified' => (bool) env('EIDAS_REQUIRE_QUALIFIED', true),
+    'authentication_policies' => Options::DEFAULT_AUTHENTICATION_POLICIES,
     'require_fore_signatures' => true,
     'maximum_store_age_seconds' => 2592000,
     'intermediates' => [],

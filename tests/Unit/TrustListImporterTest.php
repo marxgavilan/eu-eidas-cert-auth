@@ -59,6 +59,7 @@ final class TrustListImporterTest extends TestCase
         $result = $importer->importLotl($lotl);
         self::assertSame(1, $result->count);
         self::assertCount(1, $store->certificates());
+        self::assertTrue($store->manifest()[hash('sha256', TestPki::der($ca['pem']))]['fore_signatures'] ?? false);
         self::assertTrue(is_link($store->path));
         self::assertFileExists($store->path . '/bundle.pem');
 

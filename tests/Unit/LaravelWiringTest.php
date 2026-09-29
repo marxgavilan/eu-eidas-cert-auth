@@ -52,6 +52,7 @@ final class LaravelWiringTest extends TestCase
             'eidas-cert-auth.require_fore_signatures' => true,
             'eidas-cert-auth.maximum_store_age_seconds' => 12345,
             'eidas-cert-auth.intermediates' => ['test-intermediate'],
+            'eidas-cert-auth.authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']],
         ];
         $config = new class ($values) {
             /** @param array<string, mixed> $values */
@@ -87,6 +88,7 @@ final class LaravelWiringTest extends TestCase
         self::assertSame(['ES', 'PT'], $options->acceptedCountries());
         self::assertSame(12345, $options->maximumStoreAgeSeconds);
         self::assertTrue($options->requireForeSignatures);
+        self::assertSame(['ES' => ['2.16.724.1.2.2.2.4']], $options->authenticationPolicies);
         $validator = $bindings[CertificateValidator::class]($app);
         self::assertInstanceOf(CertificateValidator::class, $validator);
         self::assertSame(['test-intermediate'], (new \ReflectionProperty($validator, 'intermediates'))->getValue($validator));
