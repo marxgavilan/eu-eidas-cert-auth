@@ -1,0 +1,32 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Iberfacil\EidasCertAuth\Laravel\Console;
+
+use Iberfacil\EidasCertAuth\Trust\TrustStore;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Config;
+
+final class DoctorCommand extends Command
+{
+    protected $signature = 'eidas:doctor';
+
+    protected $description = 'Inspect the local eIDAS trust-store configuration without network access.';
+
+    public function handle(TrustStore $store): int
+    {
+        $count = count($store->certificates());
+        $this->line('Trust store: ' . $store->path);
+        $this->line('Qualified CAs: ' . $count);
+        $this->line('Region: ' . Config::get('eidas-cert-auth.region', 'ES'));
+        $this->line('Certificate server variable: ' . Config::get('eidas-cert-auth.server_variable', 'SSL_CLIENT_CERT'));
+        if ($count === 0) {
+            $this->error('No trusted CAs are installed. Run eidas:trust-list:update.');
+
+            return self::FAILURE;
+        }
+
+        return self::SUCCESS;
+    }
+}
