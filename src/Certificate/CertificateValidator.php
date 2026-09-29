@@ -18,18 +18,19 @@ use Iberfacil\EidasCertAuth\Identity\SpanishIdentityExtractor;
 use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Transport\CurlTransport;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
+use Psr\SimpleCache\CacheInterface;
 use Throwable;
 
 final class CertificateValidator
 {
-    /** @var array<string, array{pem: string, expires: int}> */
+    /** @var array<string, array{der: string, expires: int}> */
     private array $aiaCache = [];
 
     /**
      * @param list<IdentityExtractor> $extractors
      * @param list<string> $intermediates
      */
-    public function __construct(private readonly CertificateParser $parser, private readonly TrustStore $store, private readonly RevocationChecker $revocation, private readonly Options $options, private readonly array $extractors = [], private readonly array $intermediates = [], private readonly ?Transport $aiaTransport = null) {}
+    public function __construct(private readonly CertificateParser $parser, private readonly TrustStore $store, private readonly RevocationChecker $revocation, private readonly Options $options, private readonly array $extractors = [], private readonly array $intermediates = [], private readonly ?Transport $aiaTransport = null, private readonly ?CacheInterface $aiaCacheStore = null) {}
 
     public function profile(string $name): \Iberfacil\EidasCertAuth\ValidationProfile
     {
@@ -42,24 +43,24 @@ final class CertificateValidator
         $at ??= new DateTimeImmutable();
         $parsed = $this->parser->parse($raw);
         if ($parsed === null) {
-            return ValidationResult::reject('malformed');
+            return ValidationResult::reject('malformed', profile: $profile);
         }
         if ($parsed->notBefore > $at->modify('+5 minutes')) {
-            return ValidationResult::reject('not_yet_valid', $parsed);
+            return ValidationResult::reject('not_yet_valid', $parsed, $profile);
         }
         if ($parsed->notAfter <= $at) {
-            return ValidationResult::reject('expired', $parsed);
+            return ValidationResult::reject('expired', $parsed, $profile);
         }
         $leafDetails = @openssl_x509_parse($parsed->pem);
         if (! is_array($leafDetails) || self::weakSignature($leafDetails)) {
-            return ValidationResult::reject('untrusted', $parsed);
+            return ValidationResult::reject('untrusted', $parsed, $profile);
         }
-        $issuer = $this->issuer($parsed, $at);
+        $issuer = $this->issuer($parsed, $at, $policy->aiaFetch);
         if ($issuer === null) {
-            return ValidationResult::reject('untrusted', $parsed);
+            return ValidationResult::reject('untrusted', $parsed, $profile);
         }
         if ($parsed->extendedKeyUsage !== null ? ! preg_match('/(?:^|,\s*)(?:TLS Web Client Authentication|clientAuth)(?:,|$)/', $parsed->extendedKeyUsage) : ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature'))) {
-            return ValidationResult::reject('no_authentication_usage', $parsed);
+            return ValidationResult::reject('no_authentication_usage', $parsed, $profile);
         }
         $anchorMetadata = $this->store->manifest()[$issuer['anchor']] ?? [];
         $qualificationRules = $anchorMetadata['not_qualified_criteria'] ?? [];
@@ -67,19 +68,19 @@ final class CertificateValidator
         $generic = (new GenericIdentityExtractor())->extract($parsed);
         $country = $generic->country !== '' ? $generic->country : $subjectCountry;
         if (! in_array($country, $policy->countries, true)) {
-            return ValidationResult::reject('country_not_accepted', $parsed);
+            return ValidationResult::reject('country_not_accepted', $parsed, $profile);
         }
         if (! $parsed->qualified && (($anchorMetadata['country'] ?? null) !== $country || ($anchorMetadata['service'] ?? null) !== 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC' || ($anchorMetadata['fore_signatures'] ?? false) !== true)) {
-            return ValidationResult::reject('untrusted', $parsed);
+            return ValidationResult::reject('untrusted', $parsed, $profile);
         }
         if ($this->isDnieAnchor($issuer['anchor']) && ! $policy->dnie) {
-            return ValidationResult::reject('dnie_disabled_for_profile', $parsed);
+            return ValidationResult::reject('dnie_disabled_for_profile', $parsed, $profile);
         }
         if ($policy->qualifiedRequired && (! $parsed->qualified || QualificationCriteria::excludes($parsed->pem, $qualificationRules))) {
-            return ValidationResult::reject('qualified_required', $parsed);
+            return ValidationResult::reject('qualified_required', $parsed, $profile);
         }
         if (isset($policy->authenticationPolicies[$country]) && ! $this->matchesAuthenticationPolicy($parsed, $country, $policy->authenticationPolicies[$country])) {
-            return ValidationResult::reject('authentication_policy_mismatch', $parsed);
+            return ValidationResult::reject('authentication_policy_mismatch', $parsed, $profile);
         }
         $extractors = $this->extractors === [] ? [new SpanishIdentityExtractor(), new PortugueseIdentityExtractor(), new ItalianIdentityExtractor(), new FrenchIdentityExtractor(), new GermanIdentityExtractor(), new GenericIdentityExtractor()] : $this->extractors;
         foreach ($extractors as $extractor) {
@@ -89,24 +90,24 @@ final class CertificateValidator
             }
         }
         if (! isset($identity) || ($identity->personType === 'legal' ? $identity->organizationIdentifier === null : $identity->identifier === null)) {
-            return ValidationResult::reject('no_personal_identity', $parsed);
+            return ValidationResult::reject('no_personal_identity', $parsed, $profile);
         }
         if (! in_array($identity->personType, $policy->personTypes, true)) {
-            return ValidationResult::reject('person_type_not_allowed', $parsed);
+            return ValidationResult::reject('person_type_not_allowed', $parsed, $profile);
         }
         $revocation = $this->revocation->check($parsed, $issuer['pem']);
         if ($revocation['status'] === 'revoked') {
-            return ValidationResult::reject('revoked', $parsed);
+            return ValidationResult::reject('revoked', $parsed, $profile);
         }
         if ($revocation['status'] !== 'good' && ! $policy->softFailRevocation) {
-            return ValidationResult::reject('revocation_unavailable', $parsed);
+            return ValidationResult::reject('revocation_unavailable', $parsed, $profile);
         }
 
-        return new ValidationResult(true, null, $identity, $parsed, $revocation['source']);
+        return new ValidationResult(true, null, $identity, $parsed, $revocation['source'], $profile);
     }
 
     /** @return array{pem: string, anchor: string}|null */
-    private function issuer(ParsedCertificate $certificate, DateTimeImmutable $at): ?array
+    private function issuer(ParsedCertificate $certificate, DateTimeImmutable $at, bool $aiaFetch): ?array
     {
         $anchors = $this->store->certificates();
         $pool = $this->intermediates;
@@ -125,7 +126,9 @@ final class CertificateValidator
                     break;
                 }
             }
-            $next ??= $this->aiaIssuer($current, $at);
+            if ($next === null && $depth === 0 && $aiaFetch) {
+                $next = $this->aiaIssuer($certificate, $anchors, $at, $depth);
+            }
             if ($next === null || $next === $current) {
                 return null;
             }
@@ -165,37 +168,91 @@ final class CertificateValidator
         return is_string($name) && preg_match('/\bDNIE\b/i', $name) === 1;
     }
 
-    private function aiaIssuer(string $child, DateTimeImmutable $at): ?string
+    /** @param array<string, string> $anchors */
+    private function aiaIssuer(ParsedCertificate $child, array $anchors, DateTimeImmutable $at, int $depth): ?string
     {
-        $parsed = $this->parser->parse($child);
-        if ($parsed === null) {
+        if ($child->issuer === $child->subject || $child->caIssuerUrls === [] || $anchors === []) {
             return null;
         }
-        foreach (array_slice($parsed->caIssuerUrls, 0, 3) as $url) {
-            $cached = $this->aiaCache[$url] ?? null;
-            if ($cached !== null && $cached['expires'] > time()) {
-                $pem = $cached['pem'];
-            } else {
-                try {
-                    $body = ($this->aiaTransport ?? new CurlTransport(true))->get($url, $this->options->timeoutSeconds);
-                } catch (Throwable) {
-                    continue;
-                }
-                if (strlen($body) > 1_000_000) {
-                    continue;
+        $childDetails = @openssl_x509_parse($child->pem);
+        $authorityKey = is_array($childDetails) ? self::keyIdentifier($childDetails['extensions']['authorityKeyIdentifier'] ?? null) : null;
+        foreach ($anchors as $anchor) {
+            $details = @openssl_x509_parse($anchor);
+            if (is_array($details) && ($child->issuer === ($details['subject'] ?? null) || ($authorityKey !== null && $authorityKey === self::keyIdentifier($details['extensions']['subjectKeyIdentifier'] ?? null)))) {
+                return null;
+            }
+        }
+
+        $url = $child->caIssuerUrls[0];
+        $host = parse_url($url, PHP_URL_HOST);
+        if (! is_string($host) || ($this->options->aiaAllowedHosts !== [] && ! in_array(strtolower($host), $this->options->aiaAllowedHosts, true))) {
+            return null;
+        }
+        $key = 'eidas:aia:' . hash('sha256', $url);
+        try {
+            $der = $this->aiaCacheStore?->get($key);
+        } catch (Throwable) {
+            $der = null;
+        }
+        if (! is_string($der)) {
+            $cached = $this->aiaCache[$key] ?? null;
+            $der = $cached !== null && $cached['expires'] > time() ? $cached['der'] : null;
+        }
+        if ($der === null) {
+            try {
+                $body = ($this->aiaTransport ?? new CurlTransport(true, 100_000))->get($url, $this->options->aiaTimeoutSeconds);
+                if (strlen($body) > 100_000) {
+                    $body = '';
                 }
                 $pem = $this->parser->normalizePem($body) ?? $this->parser->normalizePem("-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($body), 64, "\n") . "-----END CERTIFICATE-----\n");
-                if ($pem === null || @openssl_x509_parse($pem) === false) {
-                    continue;
+                $der = $pem !== null && @openssl_x509_parse($pem) !== false ? base64_decode((string) preg_replace('/-----[^-]+-----|\s+/', '', $pem), true) : false;
+                $der = is_string($der) ? $der : '';
+                if (is_string($pem) && $der !== '') {
+                    $anchored = false;
+                    foreach ($anchors as $anchor) {
+                        if (self::signedBy($pem, $anchor, $at, $depth + 1)) {
+                            $anchored = true;
+                            break;
+                        }
+                    }
+                    if (! $anchored) {
+                        $der = '';
+                    }
                 }
-                $this->aiaCache[$url] = ['pem' => $pem, 'expires' => time() + 3600];
+            } catch (Throwable) {
+                $der = '';
             }
-            if (self::signedBy($child, $pem, $at, 0)) {
+            $ttl = $der === '' ? 300 : 3600;
+            $this->aiaCache[$key] = ['der' => $der, 'expires' => time() + $ttl];
+            try {
+                $this->aiaCacheStore?->set($key, $der, $ttl);
+            } catch (Throwable) {
+                // A cache outage must not change the certificate decision.
+            }
+        }
+        if ($der === '') {
+            return null;
+        }
+        $pem = "-----BEGIN CERTIFICATE-----\n" . chunk_split(base64_encode($der), 64, "\n") . "-----END CERTIFICATE-----\n";
+        if (! self::signedBy($child->pem, $pem, $at, $depth)) {
+            return null;
+        }
+        foreach ($anchors as $anchor) {
+            if (self::signedBy($pem, $anchor, $at, $depth + 1)) {
                 return $pem;
             }
         }
 
         return null;
+    }
+
+    private static function keyIdentifier(mixed $value): ?string
+    {
+        if (! is_string($value) || ! preg_match('/(?:keyid:)?\s*([0-9a-f]{2}(?::[0-9a-f]{2}){7,})/i', $value, $match)) {
+            return null;
+        }
+
+        return strtolower($match[1]);
     }
 
     private static function signedBy(string $child, string $issuer, DateTimeImmutable $at, int $depth): bool

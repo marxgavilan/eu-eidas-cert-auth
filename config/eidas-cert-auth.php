@@ -12,12 +12,17 @@ return [
     'store_path' => env('EIDAS_STORE_PATH', storage_path('app/eidas-trust')),
     'minimum_retention_percent' => (int) env('EIDAS_MINIMUM_RETENTION', 80),
     'timeout_seconds' => (int) env('EIDAS_TIMEOUT', 15),
+    'aia_fetch' => (bool) env('EIDAS_AIA_FETCH', true),
+    'aia_timeout_seconds' => (int) env('EIDAS_AIA_TIMEOUT', 4),
+    'aia_allowed_hosts' => array_values(array_filter(array_map(static fn(string $host): string => strtolower(trim($host)), explode(',', (string) env('EIDAS_AIA_ALLOWED_HOSTS', ''))))),
+    'aia_cache_store' => env('EIDAS_AIA_CACHE_STORE'),
     'require_qualified' => (bool) env('EIDAS_REQUIRE_QUALIFIED', false),
     'authentication_policies' => Options::DEFAULT_AUTHENTICATION_POLICIES,
     // Each named profile may override countries, qualified_required, person_types,
-    // dnie, authentication_policies (country => OIDs), and soft_fail_revocation.
+    // dnie, authentication_policies (country => OIDs), soft_fail_revocation, and aia_fetch.
     // EIDAS_PROFILES may contain a JSON object with the same structure.
-    'profiles' => json_decode((string) env('EIDAS_PROFILES', '{}'), true, flags: JSON_THROW_ON_ERROR),
+    // Parsing is deferred until Options is resolved, so invalid JSON cannot stop app boot.
+    'profiles' => env('EIDAS_PROFILES', '{}'),
     'require_fore_signatures' => true,
     'maximum_store_age_seconds' => 2592000,
     'intermediates' => [],

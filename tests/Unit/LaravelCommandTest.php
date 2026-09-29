@@ -80,15 +80,17 @@ final class LaravelCommandTest extends TestCase
         $app = $this->createMockForIntersectionOfInterfaces([Application::class, \ArrayAccess::class]);
         self::assertInstanceOf(Application::class, $app);
         $app->method('offsetGet')->with('config')->willReturn($config);
+        $app->method('make')->willReturnCallback(static fn(string $abstract): mixed => $abstract === Options::class ? new Options() : $store);
         Facade::setFacadeApplication($app);
         $command = new DoctorCommand();
+        $command->setLaravel($app);
         try {
             $this->setIo($command);
-            self::assertSame(1, $command->handle($store));
+            self::assertSame(1, $command->handle());
             $pki = new TestPki();
             $ca = $pki->issue(['CN' => 'CA'], profile: 'ca');
             $store->publish([hash('sha256', TestPki::der($ca['pem'])) => ['pem' => $ca['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
-            self::assertSame(0, $command->handle($store));
+            self::assertSame(0, $command->handle());
         } finally {
             Facade::clearResolvedInstances();
             Facade::setFacadeApplication(null);

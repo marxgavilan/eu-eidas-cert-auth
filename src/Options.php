@@ -28,6 +28,7 @@ final readonly class Options
      * @param list<string> $lotlSignerFingerprints
      * @param array<string, list<string>> $authenticationPolicies
      * @param array<string, array<string, mixed>> $profiles
+     * @param list<string> $aiaAllowedHosts
      */
     public function __construct(
         public string $region = 'ES',
@@ -42,9 +43,20 @@ final readonly class Options
         public int $maximumStoreAgeSeconds = 2592000,
         public array $authenticationPolicies = self::DEFAULT_AUTHENTICATION_POLICIES,
         public array $profiles = [],
+        public bool $aiaFetch = true,
+        public array $aiaAllowedHosts = [],
+        public int $aiaTimeoutSeconds = 4,
     ) {
-        if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1) {
+        if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1 || $aiaTimeoutSeconds < 3 || $aiaTimeoutSeconds > 5) {
             throw new InvalidArgumentException('Invalid eIDAS options.');
+        }
+        if (! array_is_list($aiaAllowedHosts)) {
+            throw new InvalidArgumentException('Invalid AIA allowed hosts.');
+        }
+        foreach ($aiaAllowedHosts as $host) {
+            if (! is_string($host) || $host === '' || strtolower($host) !== $host || ! preg_match('/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/D', $host)) {
+                throw new InvalidArgumentException('Invalid AIA allowed host.');
+            }
         }
         $seen = [];
         foreach ($countries as $country) {
@@ -86,12 +98,12 @@ final readonly class Options
         if (! is_array($settings)) {
             throw new InvalidArgumentException("Invalid eIDAS validation profile: {$name}");
         }
-        $allowed = ['countries', 'qualified_required', 'person_types', 'dnie', 'authentication_policies', 'soft_fail_revocation'];
+        $allowed = ['countries', 'qualified_required', 'person_types', 'dnie', 'authentication_policies', 'soft_fail_revocation', 'aia_fetch'];
         foreach ($settings as $key => $value) {
             if (! in_array($key, $allowed, true)) {
                 throw new InvalidArgumentException("Unknown eIDAS profile setting: {$key}");
             }
-            if (in_array($key, ['qualified_required', 'dnie', 'soft_fail_revocation'], true) && ! is_bool($value)) {
+            if (in_array($key, ['qualified_required', 'dnie', 'soft_fail_revocation', 'aia_fetch'], true) && ! is_bool($value)) {
                 throw new InvalidArgumentException("Invalid eIDAS profile setting: {$key}");
             }
         }
@@ -108,6 +120,7 @@ final readonly class Options
             dnie: $settings['dnie'] ?? in_array('ES', $settings['countries'] ?? $this->acceptedCountries(), true),
             authenticationPolicies: array_filter($settings['authentication_policies'] ?? $this->authenticationPolicies),
             softFailRevocation: $settings['soft_fail_revocation'] ?? $this->softFailRevocation,
+            aiaFetch: $settings['aia_fetch'] ?? $this->aiaFetch,
         );
     }
 }

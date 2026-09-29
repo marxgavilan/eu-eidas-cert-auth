@@ -20,6 +20,7 @@ final readonly class ValidationProfile
         public bool $dnie = true,
         public array $authenticationPolicies = [],
         public bool $softFailRevocation = false,
+        public bool $aiaFetch = true,
     ) {
         if ($countries === [] || ! array_is_list($countries) || count(array_unique($countries)) !== count($countries)) {
             throw new InvalidArgumentException('Invalid profile countries.');

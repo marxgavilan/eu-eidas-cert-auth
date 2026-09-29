@@ -9,7 +9,7 @@ use Iberfacil\EidasCertAuth\Exceptions\EidasCertAuthException;
 
 final class CurlTransport implements Transport
 {
-    public function __construct(private readonly bool $allowHttp = false) {}
+    public function __construct(private readonly bool $allowHttp = false, private readonly int $maximumBytes = 20_000_000) {}
 
     public function get(string $url, int $timeoutSeconds): string
     {
@@ -64,8 +64,8 @@ final class CurlTransport implements Transport
         }
         $result = '';
         $tooLarge = false;
-        curl_setopt($curl, CURLOPT_WRITEFUNCTION, static function ($handle, string $chunk) use (&$result, &$tooLarge): int {
-            if (strlen($result) + strlen($chunk) > 20_000_000) {
+        curl_setopt($curl, CURLOPT_WRITEFUNCTION, function ($handle, string $chunk) use (&$result, &$tooLarge): int {
+            if (strlen($result) + strlen($chunk) > $this->maximumBytes) {
                 $tooLarge = true;
 
                 return 0;

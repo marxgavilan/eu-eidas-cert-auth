@@ -15,6 +15,7 @@ use Iberfacil\EidasCertAuth\Transport\FakeTransport;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
 use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
+use Psr\SimpleCache\CacheInterface;
 
 final class CertificateValidatorTest extends TestCase
 {
@@ -215,6 +216,15 @@ final class CertificateValidatorTest extends TestCase
         $client = $pki->issue($subject, $intermediate, 'dnie_auth');
         $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $intermediate));
         self::assertTrue($configured->validate($client['pem'])->valid);
+        $offlineTransport = new FakeTransport();
+        $offline = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(profiles: ['offline' => ['aia_fetch' => false]]), aiaTransport: $offlineTransport);
+        $offlineResult = $offline->validate($client['pem'], profile: 'offline');
+        self::assertSame('untrusted', $offlineResult->reason);
+        self::assertSame('offline', $offlineResult->profile);
+        self::assertCount(0, $offlineTransport->sent);
+        $blockedHost = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(aiaAllowedHosts: ['ca.example.test']), aiaTransport: $offlineTransport);
+        self::assertSame('untrusted', $blockedHost->validate($client['pem'])->reason);
+        self::assertCount(0, $offlineTransport->sent);
         $restricted = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(profiles: ['restricted' => ['authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]]]), intermediates: [$intermediate['pem']]);
         self::assertTrue($restricted->validate($client['pem'], profile: 'restricted')->valid);
         $wrongPolicy = $pki->issue($subject, $intermediate, 'dnie_wrong_policy');
@@ -255,7 +265,9 @@ final class CertificateValidatorTest extends TestCase
             'soft' => ['soft_fail_revocation' => true],
         ]);
         $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), $options, aiaTransport: $transport);
-        self::assertTrue($validator->validate($dnie['pem'], profile: 'login')->valid);
+        $loginResult = $validator->validate($dnie['pem'], profile: 'login');
+        self::assertTrue($loginResult->valid);
+        self::assertSame('login', $loginResult->profile);
         self::assertSame('dnie_disabled_for_profile', $validator->validate($dnie['pem'], profile: 'onboarding')->reason);
         self::assertSame('qualified_required', $validator->validate($dnie['pem'], profile: 'signature')->reason);
         foreach (['login', 'signature', 'onboarding'] as $profile) {
@@ -276,6 +288,80 @@ final class CertificateValidatorTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Unknown eIDAS validation profile: absent');
         $validator->validate('not a certificate', profile: 'absent');
+    }
+
+    public function testAiaIsLimitedToLeafAndOneRequestAndSharesFailures(): void
+    {
+        $pki = new TestPki();
+        $anchor = $pki->issue(['CN' => 'Trusted anchor'], profile: 'ca');
+        $foreignRoot = $pki->issue(['CN' => 'Foreign root'], profile: 'ca');
+        $foreignIssuer = $pki->issue(['CN' => 'Foreign issuer'], $foreignRoot, 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($anchor['pem'])) => ['pem' => $anchor['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $transport = (new FakeTransport())->respond('http://aia.example.test/issuer.crt', TestPki::der($foreignIssuer['pem']));
+        $selfSigned = $pki->issue(['CN' => 'Self signed'], profile: 'aia_many_self');
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(), aiaTransport: $transport);
+        self::assertSame('untrusted', $validator->validate($selfSigned['pem'])->reason);
+        self::assertCount(0, $transport->sent);
+
+        $leaf = $pki->issue(['CN' => 'Client', 'C' => 'ES'], $foreignIssuer, 'dnie_auth');
+        $cached = null;
+        $cache = $this->createMock(CacheInterface::class);
+        $cache->method('get')->willReturnCallback(static function (string $key) use (&$cached): mixed {
+            return $cached;
+        });
+        $cache->method('set')->willReturnCallback(static function (string $key, mixed $value, int $ttl) use (&$cached): bool {
+            $cached = $value;
+            self::assertSame(300, $ttl);
+
+            return true;
+        });
+        for ($i = 0; $i < 2; $i++) {
+            $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(), aiaTransport: $transport, aiaCacheStore: $cache);
+            self::assertSame('untrusted', $validator->validate($leaf['pem'])->reason);
+        }
+        self::assertCount(1, $transport->sent);
+        self::assertSame(4, $transport->sent[0]['timeout']);
+    }
+
+    public function testIntermediatePathLengthUsesActualDepth(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Root'], profile: 'ca');
+        $limited = $pki->issue(['CN' => 'Limited'], $root, 'ca_pathlen0');
+        $lower = $pki->issue(['CN' => 'Lower'], $limited, 'ca');
+        $leaf = $pki->issue(['CN' => 'Client', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $lower, 'client');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(), intermediates: [$lower['pem'], $limited['pem']]);
+        self::assertSame('untrusted', $validator->validate($leaf['pem'])->reason);
+    }
+
+    public function testSuccessfulAiaDownloadIsSharedAcrossValidators(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'AC RAIZ DNIE 2', 'C' => 'ES'], profile: 'ca');
+        $issuer = $pki->issue(['CN' => 'AC DNIE 004', 'C' => 'ES'], $root, 'ca');
+        $leaf = $pki->issue(['CN' => 'Citizen', 'serialNumber' => '12345678Z', 'C' => 'ES'], $issuer, 'dnie_auth');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $transport = (new FakeTransport())->respond('http://aia.example.test/issuer.crt', TestPki::der($issuer['pem']));
+        $cached = null;
+        $cache = $this->createMock(CacheInterface::class);
+        $cache->method('get')->willReturnCallback(static function (string $key) use (&$cached): mixed {
+            return $cached;
+        });
+        $cache->method('set')->willReturnCallback(static function (string $key, mixed $value, int $ttl) use (&$cached): bool {
+            $cached = $value;
+            self::assertSame(3600, $ttl);
+
+            return true;
+        });
+        for ($i = 0; $i < 2; $i++) {
+            $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(softFailRevocation: true), aiaTransport: $transport, aiaCacheStore: $cache);
+            self::assertTrue($validator->validate($leaf['pem'])->valid);
+        }
+        self::assertCount(1, $transport->sent);
     }
 
 }

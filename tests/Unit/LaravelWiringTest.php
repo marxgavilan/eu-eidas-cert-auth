@@ -13,8 +13,11 @@ use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Cache\Factory as CacheFactory;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Foundation\CachesConfiguration;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 final class LaravelWiringTest extends TestCase
@@ -98,12 +101,16 @@ final class LaravelWiringTest extends TestCase
         $app->method('singleton')->willReturnCallback(static function (string $abstract, mixed $factory) use (&$bindings): void {
             $bindings[$abstract] = $factory;
         });
-        $app->method('make')->willReturnCallback(static function (string $abstract) use ($config, &$options): mixed {
+        $cacheRepository = $this->createMock(Repository::class);
+        $cacheFactory = $this->createMock(CacheFactory::class);
+        $cacheFactory->method('store')->willReturn($cacheRepository);
+        $app->method('make')->willReturnCallback(static function (string $abstract) use ($config, &$options, $cacheFactory): mixed {
             return match ($abstract) {
                 'config' => $config,
                 Options::class => $options,
                 TrustStore::class => new TrustStore('/tmp/nonexistent-eidas-wiring'),
                 RevocationCache::class => new InMemoryRevocationCache(),
+                CacheFactory::class => $cacheFactory,
                 default => null,
             };
         });
@@ -121,5 +128,28 @@ final class LaravelWiringTest extends TestCase
         $validator = $bindings[CertificateValidator::class]($app);
         self::assertInstanceOf(CertificateValidator::class, $validator);
         self::assertSame(['test-intermediate'], (new \ReflectionProperty($validator, 'intermediates'))->getValue($validator));
+    }
+
+    public function testInvalidProfilesJsonFailsWhenOptionsAreUsedNotAtRegistration(): void
+    {
+        $config = new class {
+            public function get(string $key, mixed $default = null): mixed
+            {
+                return $key === 'eidas-cert-auth.profiles' ? '{invalid' : $default;
+            }
+        };
+        $bindings = [];
+        $app = $this->createMockForIntersectionOfInterfaces([Application::class, CachesConfiguration::class]);
+        self::assertInstanceOf(Application::class, $app);
+        $app->method('configurationIsCached')->willReturn(true);
+        $app->method('singleton')->willReturnCallback(static function (string $abstract, mixed $factory) use (&$bindings): void {
+            $bindings[$abstract] = $factory;
+        });
+        $app->method('make')->with('config')->willReturn($config);
+        (new EidasCertAuthServiceProvider($app))->register();
+        self::assertArrayHasKey(Options::class, $bindings);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid EIDAS_PROFILES JSON');
+        $bindings[Options::class]($app);
     }
 }
