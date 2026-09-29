@@ -14,8 +14,10 @@ final readonly class ValidateClientCertificate
 {
     public function __construct(private CertificateValidator $validator, private ?Closure $configuration = null) {}
 
-    public function handle(Request $request, Closure $next): mixed
+    public function handle(Request $request, Closure $next, string $profile = 'default'): mixed
     {
+        // Resolve before reading the request so a misspelled route profile is a configuration error.
+        $this->validator->profile($profile);
         $serverKey = (string) $this->setting('eidas-cert-auth.server_variable', 'SSL_CLIENT_CERT');
         if ($serverKey === '' || str_starts_with(strtoupper($serverKey), 'HTTP_')) {
             throw new AccessDeniedHttpException('Invalid certificate server variable.');
@@ -28,7 +30,7 @@ final readonly class ValidateClientCertificate
         if (! is_string($pem) || $pem === '') {
             throw new AccessDeniedHttpException('A client certificate is required.');
         }
-        $result = $this->validator->validate($pem);
+        $result = $this->validator->validate($pem, profile: $profile);
         if (! $result->valid) {
             throw new AccessDeniedHttpException('Client certificate rejected: ' . $result->reason);
         }

@@ -31,8 +31,14 @@ final class CertificateValidator
      */
     public function __construct(private readonly CertificateParser $parser, private readonly TrustStore $store, private readonly RevocationChecker $revocation, private readonly Options $options, private readonly array $extractors = [], private readonly array $intermediates = [], private readonly ?Transport $aiaTransport = null) {}
 
-    public function validate(string $raw, ?DateTimeImmutable $at = null): ValidationResult
+    public function profile(string $name): \Iberfacil\EidasCertAuth\ValidationProfile
     {
+        return $this->options->profile($name);
+    }
+
+    public function validate(string $raw, ?DateTimeImmutable $at = null, string $profile = 'default'): ValidationResult
+    {
+        $policy = $this->options->profile($profile);
         $at ??= new DateTimeImmutable();
         $parsed = $this->parser->parse($raw);
         if ($parsed === null) {
@@ -52,19 +58,28 @@ final class CertificateValidator
         if ($issuer === null) {
             return ValidationResult::reject('untrusted', $parsed);
         }
-        if ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature') || ($parsed->extendedKeyUsage !== null && ! preg_match('/(?:^|,\s*)(?:TLS Web Client Authentication|clientAuth)(?:,|$)/', $parsed->extendedKeyUsage))) {
-            return ValidationResult::reject('not_for_authentication', $parsed);
+        if ($parsed->extendedKeyUsage !== null ? ! preg_match('/(?:^|,\s*)(?:TLS Web Client Authentication|clientAuth)(?:,|$)/', $parsed->extendedKeyUsage) : ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature'))) {
+            return ValidationResult::reject('no_authentication_usage', $parsed);
         }
         $anchorMetadata = $this->store->manifest()[$issuer['anchor']] ?? [];
         $qualificationRules = $anchorMetadata['not_qualified_criteria'] ?? [];
         $subjectCountry = strtoupper((string) ($parsed->subject['C'] ?? ''));
         $generic = (new GenericIdentityExtractor())->extract($parsed);
         $country = $generic->country !== '' ? $generic->country : $subjectCountry;
-        if (! in_array($country, $this->options->acceptedCountries(), true)) {
+        if (! in_array($country, $policy->countries, true)) {
             return ValidationResult::reject('country_not_accepted', $parsed);
         }
-        if ($this->options->requireQualified && (QualificationCriteria::excludes($parsed->pem, $qualificationRules) || (! $parsed->qualified && ! $this->matchesAuthenticationPolicy($parsed, $country, $anchorMetadata)))) {
-            return ValidationResult::reject('not_qualified', $parsed);
+        if (! $parsed->qualified && (($anchorMetadata['country'] ?? null) !== $country || ($anchorMetadata['service'] ?? null) !== 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC' || ($anchorMetadata['fore_signatures'] ?? false) !== true)) {
+            return ValidationResult::reject('untrusted', $parsed);
+        }
+        if ($this->isDnieAnchor($issuer['anchor']) && ! $policy->dnie) {
+            return ValidationResult::reject('dnie_disabled_for_profile', $parsed);
+        }
+        if ($policy->qualifiedRequired && (! $parsed->qualified || QualificationCriteria::excludes($parsed->pem, $qualificationRules))) {
+            return ValidationResult::reject('qualified_required', $parsed);
+        }
+        if (isset($policy->authenticationPolicies[$country]) && ! $this->matchesAuthenticationPolicy($parsed, $country, $policy->authenticationPolicies[$country])) {
+            return ValidationResult::reject('authentication_policy_mismatch', $parsed);
         }
         $extractors = $this->extractors === [] ? [new SpanishIdentityExtractor(), new PortugueseIdentityExtractor(), new ItalianIdentityExtractor(), new FrenchIdentityExtractor(), new GermanIdentityExtractor(), new GenericIdentityExtractor()] : $this->extractors;
         foreach ($extractors as $extractor) {
@@ -73,14 +88,17 @@ final class CertificateValidator
                 break;
             }
         }
-        if (! isset($identity) || $identity->identifier === null || $identity->personType === 'legal') {
+        if (! isset($identity) || ($identity->personType === 'legal' ? $identity->organizationIdentifier === null : $identity->identifier === null)) {
             return ValidationResult::reject('no_personal_identity', $parsed);
+        }
+        if (! in_array($identity->personType, $policy->personTypes, true)) {
+            return ValidationResult::reject('person_type_not_allowed', $parsed);
         }
         $revocation = $this->revocation->check($parsed, $issuer['pem']);
         if ($revocation['status'] === 'revoked') {
             return ValidationResult::reject('revoked', $parsed);
         }
-        if ($revocation['status'] !== 'good' && ! $this->options->softFailRevocation) {
+        if ($revocation['status'] !== 'good' && ! $policy->softFailRevocation) {
             return ValidationResult::reject('revocation_unavailable', $parsed);
         }
 
@@ -118,26 +136,33 @@ final class CertificateValidator
         return null;
     }
 
-    /** @param array<string, mixed> $anchorMetadata */
-    private function matchesAuthenticationPolicy(ParsedCertificate $certificate, string $country, array $anchorMetadata): bool
+    /** @param list<string> $accepted */
+    private function matchesAuthenticationPolicy(ParsedCertificate $certificate, string $country, array $accepted): bool
     {
-        if (($anchorMetadata['country'] ?? null) !== $country || ($anchorMetadata['service'] ?? null) !== 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC' || ($anchorMetadata['fore_signatures'] ?? false) !== true) {
-            return false;
-        }
         $details = @openssl_x509_parse($certificate->pem);
         $policies = is_array($details) ? ($details['extensions']['certificatePolicies'] ?? null) : null;
         if (! is_string($policies)) {
             return false;
         }
-        foreach ($this->options->authenticationPolicies[$country] ?? [] as $oid) {
+        foreach ($accepted as $oid) {
             // Only the DNIe policy has a documented two-component version suffix.
-            $version = $country === 'ES' && $oid === Options::DEFAULT_AUTHENTICATION_POLICIES['ES'][0] ? '(?:\.\d+\.\d+)?' : '';
+            $version = $country === 'ES' && $oid === '2.16.724.1.2.2.2.4' ? '(?:\.\d+\.\d+)?' : '';
             if (preg_match('/(?:^|\n)\s*Policy:\s*' . preg_quote($oid, '/') . $version . '(?=\s|$)/', $policies)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    private function isDnieAnchor(string $fingerprint): bool
+    {
+        $pem = $this->store->certificates()[$fingerprint] ?? null;
+        $details = is_string($pem) ? @openssl_x509_parse($pem) : false;
+        $subject = is_array($details) ? ($details['subject'] ?? []) : [];
+        $name = is_array($subject) ? ($subject['CN'] ?? '') : '';
+
+        return is_string($name) && preg_match('/\bDNIE\b/i', $name) === 1;
     }
 
     private function aiaIssuer(string $child, DateTimeImmutable $at): ?string

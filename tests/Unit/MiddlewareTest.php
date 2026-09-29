@@ -14,6 +14,7 @@ use Iberfacil\EidasCertAuth\Tests\Support\TestPki;
 use Iberfacil\EidasCertAuth\Transport\FakeTransport;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
 use Illuminate\Http\Request;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
 
@@ -100,6 +101,47 @@ final class MiddlewareTest extends TestCase
         $request = Request::create('/certificate-login', 'GET', [], [], [], ['REMOTE_ADDR' => '203.0.113.10']);
         $this->expectExceptionMessage('A client certificate is required.');
         $middleware->handle($request, static fn(): null => null);
+    }
+
+    public function testRouteProfileIsPassedToValidatorAndUnknownNameIsConfigurationError(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'AC RAIZ DNIE 2', 'C' => 'ES'], profile: 'ca');
+        $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
+        $dir = sys_get_temp_dir() . '/eidas-middleware-profile-' . bin2hex(random_bytes(6));
+        mkdir($dir, 0700);
+        $store = new TrustStore($dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $root));
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(profiles: ['login' => ['dnie' => true], 'onboarding' => ['dnie' => false]]));
+        $middleware = new ValidateClientCertificate($validator, static fn(string $key, mixed $default = null): mixed => $default);
+        $request = Request::create('/login', 'GET', [], [], [], ['SSL_CLIENT_CERT' => $client['pem']]);
+        try {
+            self::assertSame('ok', $middleware->handle($request, static fn(): string => 'ok', 'login'));
+            try {
+                $middleware->handle($request, static fn(): string => 'unexpected', 'onboarding');
+                self::fail('DNIe opt-out was ignored.');
+            } catch (AccessDeniedHttpException $exception) {
+                self::assertSame('Client certificate rejected: dnie_disabled_for_profile', $exception->getMessage());
+            }
+            $this->expectException(InvalidArgumentException::class);
+            $this->expectExceptionMessage('Unknown eIDAS validation profile: missing');
+            $middleware->handle($request, static fn(): string => 'unexpected', 'missing');
+        } finally {
+            foreach (glob($dir . '/.trust.*') ?: [] as $generation) {
+                if (! is_dir($generation)) {
+                    unlink($generation);
+
+                    continue;
+                }
+                foreach (glob($generation . '/*') ?: [] as $file) {
+                    unlink($file);
+                }
+                rmdir($generation);
+            }
+            unlink($dir . '/trust');
+            rmdir($dir);
+        }
     }
 
 }

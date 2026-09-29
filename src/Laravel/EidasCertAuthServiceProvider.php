@@ -11,6 +11,7 @@ use Iberfacil\EidasCertAuth\Contracts\RevocationCache;
 use Iberfacil\EidasCertAuth\Contracts\Transport;
 use Iberfacil\EidasCertAuth\Laravel\Console\DoctorCommand;
 use Iberfacil\EidasCertAuth\Laravel\Console\TrustListUpdateCommand;
+use Iberfacil\EidasCertAuth\Laravel\Middleware\ValidateClientCertificate;
 use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Transport\CurlTransport;
 use Iberfacil\EidasCertAuth\Trust\TrustListImporter;
@@ -36,11 +37,12 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
                 lotlSignerFingerprints: array_values(array_filter((array) $config->get('eidas-cert-auth.lotl_signer_fingerprints', Options::OJ_FINGERPRINTS), 'is_string')),
                 minimumRetentionPercent: (int) $config->get('eidas-cert-auth.minimum_retention_percent', 80),
                 timeoutSeconds: (int) $config->get('eidas-cert-auth.timeout_seconds', 15),
-                requireQualified: (bool) $config->get('eidas-cert-auth.require_qualified', true),
+                requireQualified: (bool) $config->get('eidas-cert-auth.require_qualified', false),
                 softFailRevocation: (bool) $config->get('eidas-cert-auth.soft_fail_revocation', false),
                 requireForeSignatures: (bool) $config->get('eidas-cert-auth.require_fore_signatures', true),
                 maximumStoreAgeSeconds: (int) $config->get('eidas-cert-auth.maximum_store_age_seconds', 2592000),
                 authenticationPolicies: (array) $config->get('eidas-cert-auth.authentication_policies', Options::DEFAULT_AUTHENTICATION_POLICIES),
+                profiles: (array) $config->get('eidas-cert-auth.profiles', []),
             );
         });
         $this->app->singleton(TrustStore::class, static fn(Application $app): TrustStore => new TrustStore((string) $app->make('config')->get('eidas-cert-auth.store_path'), $app->make(Options::class)->minimumRetentionPercent, $app->make(Options::class)->maximumStoreAgeSeconds));
@@ -58,6 +60,12 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        if ($this->app->bound('router')) {
+            $router = $this->app->make('router');
+            if (is_object($router) && method_exists($router, 'aliasMiddleware')) {
+                $router->aliasMiddleware('eidas.cert', ValidateClientCertificate::class);
+            }
+        }
         if ($this->app->runningInConsole()) {
             $this->publishes([__DIR__ . '/../../config/eidas-cert-auth.php' => $this->app->configPath('eidas-cert-auth.php')], 'eidas-cert-auth-config');
             $this->commands([TrustListUpdateCommand::class, DoctorCommand::class]);

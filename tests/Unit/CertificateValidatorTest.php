@@ -13,6 +13,7 @@ use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Tests\Support\TestPki;
 use Iberfacil\EidasCertAuth\Transport\FakeTransport;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
+use InvalidArgumentException;
 use PHPUnit\Framework\TestCase;
 
 final class CertificateValidatorTest extends TestCase
@@ -50,7 +51,7 @@ final class CertificateValidatorTest extends TestCase
         $intermediate = $pki->issue(['CN' => 'Fictional Intermediate CA', 'C' => 'ES'], $root, 'ca', 3650);
         $store = new TrustStore($this->dir . '/trust');
         $fingerprint = hash('sha256', TestPki::der($root['pem']));
-        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $transport = new FakeTransport();
         $cache = new InMemoryRevocationCache();
         $checker = new RevocationChecker($transport, $cache);
@@ -87,7 +88,7 @@ final class CertificateValidatorTest extends TestCase
         $root = $pki->issue(['CN' => 'Fictional Root CA'], profile: 'ca', days: 3650);
         $store = new TrustStore($this->dir . '/trust');
         $fingerprint = hash('sha256', TestPki::der($root['pem']));
-        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $transport = new FakeTransport();
         $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
         $subject = ['CN' => 'Imaginary Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
@@ -97,7 +98,7 @@ final class CertificateValidatorTest extends TestCase
         self::assertSame('expired', $validator->validate($client['pem'], new DateTimeImmutable('+2 years'))->reason);
         $expired = $pki->issue($subject, $root, 'client', 0);
         self::assertSame('expired', $validator->validate($expired['pem'], new DateTimeImmutable('+1 minute'))->reason);
-        self::assertSame('not_for_authentication', $validator->validate($pki->issue($subject, $root, 'client_no_auth')['pem'])->reason);
+        self::assertSame('no_authentication_usage', $validator->validate($pki->issue($subject, $root, 'client_no_auth')['pem'])->reason);
         self::assertSame('untrusted', $validator->validate($pki->issue($subject, null, 'client')['pem'])->reason);
     }
 
@@ -107,7 +108,7 @@ final class CertificateValidatorTest extends TestCase
         $root = $pki->issue(['CN' => 'Fictional CRL CA'], profile: 'ca');
         $store = new TrustStore($this->dir . '/trust');
         $fingerprint = hash('sha256', TestPki::der($root['pem']));
-        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([$fingerprint => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $client = $pki->issue(['CN' => 'Example Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
         $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', 'unavailable')->respond('http://crl.example.test/list.crl', $pki->crl($client['pem'], $root));
         $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
@@ -123,7 +124,7 @@ final class CertificateValidatorTest extends TestCase
         $pki = new TestPki();
         $root = $pki->issue(['CN' => 'Root'], profile: 'ca', days: 3650);
         $store = new TrustStore($this->dir . '/trust');
-        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $transport = new FakeTransport();
         $strict = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
         $subject = ['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
@@ -132,8 +133,9 @@ final class CertificateValidatorTest extends TestCase
         self::assertSame('revocation_unavailable', $strict->validate($client['pem'])->reason);
         $soft = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(softFailRevocation: true));
         self::assertTrue($soft->validate($client['pem'])->valid);
-        self::assertSame('not_qualified', $strict->validate($pki->issue($subject, $root, 'client_no_qc')['pem'])->reason);
-        self::assertSame('not_qualified', $strict->validate($pki->issue($subject, $root, 'client_fake_qc')['pem'])->reason);
+        $qualified = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(profiles: ['signature' => ['qualified_required' => true]]));
+        self::assertSame('qualified_required', $qualified->validate($pki->issue($subject, $root, 'client_no_qc')['pem'], profile: 'signature')->reason);
+        self::assertSame('qualified_required', $qualified->validate($pki->issue($subject, $root, 'client_fake_qc')['pem'], profile: 'signature')->reason);
         self::assertSame('country_not_accepted', $strict->validate($pki->issue(['CN' => 'PT', 'serialNumber' => 'TINPT-123', 'C' => 'PT'], $root, 'client')['pem'])->reason);
         self::assertSame('no_personal_identity', $strict->validate($pki->issue(['CN' => 'Company', 'C' => 'ES'], $root, 'client')['pem'])->reason);
         self::assertSame('untrusted', $strict->validate($pki->issue($subject, $root, 'client', digest: 'sha1')['pem'])->reason);
@@ -148,17 +150,17 @@ final class CertificateValidatorTest extends TestCase
         $pki = new TestPki();
         $root = $pki->issue(['CN' => 'Root'], profile: 'ca');
         $store = new TrustStore($this->dir . '/trust');
-        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
         $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', 'invalid')->respond('http://crl.example.test/list.crl', $pki->crl($client['pem'], $root, true));
         $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
         self::assertSame('revoked', $validator->validate($client['pem'])->reason);
         $badCa = $pki->issue(['CN' => 'No certificate signing'], profile: 'ca_no_sign');
-        $store->publish([hash('sha256', TestPki::der($badCa['pem'])) => ['pem' => $badCa['pem'], 'country' => 'ES', 'service' => 'CA/QC']], force: true);
+        $store->publish([hash('sha256', TestPki::der($badCa['pem'])) => ['pem' => $badCa['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]], force: true);
         self::assertSame('untrusted', $validator->validate($pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $badCa, 'client')['pem'])->reason);
         $limitedRoot = $pki->issue(['CN' => 'Path length zero'], profile: 'ca_pathlen0');
         $intermediate = $pki->issue(['CN' => 'Intermediate'], $limitedRoot, 'ca');
-        $store->publish([hash('sha256', TestPki::der($limitedRoot['pem'])) => ['pem' => $limitedRoot['pem'], 'country' => 'ES', 'service' => 'CA/QC']], force: true);
+        $store->publish([hash('sha256', TestPki::der($limitedRoot['pem'])) => ['pem' => $limitedRoot['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]], force: true);
         $withIntermediate = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), intermediates: [$intermediate['pem']]);
         self::assertSame('untrusted', $withIntermediate->validate($pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $intermediate, 'client')['pem'])->reason);
     }
@@ -168,7 +170,7 @@ final class CertificateValidatorTest extends TestCase
         $root = $pki->issue(['CN' => 'Short lived CA'], profile: 'ca', days: 0);
         $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
         $store = new TrustStore($this->dir . '/trust');
-        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         usleep(1_100_000);
         $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options());
         self::assertSame('untrusted', $validator->validate($client['pem'])->reason);
@@ -182,10 +184,10 @@ final class CertificateValidatorTest extends TestCase
         $store = new TrustStore($this->dir . '/trust');
         $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
         $transport = (new FakeTransport())->respond('http://aia.example.test/issuer.crt', TestPki::der($intermediate['pem']));
-        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(authenticationPolicies: ['ES' => ['2.16.724.1.2.2.2.4']]), aiaTransport: $transport);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), aiaTransport: $transport);
         $subject = ['CN' => 'Example (AUTENTICACION)', 'serialNumber' => '12345678Z', 'C' => 'ES'];
 
-        foreach (['dnie_auth' => true, 'dnie_no_eku' => true, 'dnie_versioned' => true, 'dnie_wrong_policy' => false, 'dnie_wrong_eku' => false, 'dnie_bad_ku' => false] as $profile => $expected) {
+        foreach (['dnie_auth' => true, 'dnie_no_eku' => true, 'dnie_versioned' => true, 'dnie_wrong_policy' => true, 'dnie_wrong_eku' => false, 'dnie_bad_ku' => true] as $profile => $expected) {
             $client = $pki->issue($subject, $intermediate, $profile);
             $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $intermediate));
             $result = $validator->validate($client['pem']);
@@ -193,7 +195,7 @@ final class CertificateValidatorTest extends TestCase
             if ($expected) {
                 self::assertSame('12345678Z', $result->identity?->identifier);
             } else {
-                self::assertSame($profile === 'dnie_wrong_policy' ? 'not_qualified' : 'not_for_authentication', $result->reason);
+                self::assertSame('no_authentication_usage', $result->reason);
             }
         }
         self::assertCount(1, array_filter($transport->sent, static fn(array $request): bool => $request['url'] === 'http://aia.example.test/issuer.crt'));
@@ -213,13 +215,67 @@ final class CertificateValidatorTest extends TestCase
         $client = $pki->issue($subject, $intermediate, 'dnie_auth');
         $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $intermediate));
         self::assertTrue($configured->validate($client['pem'])->valid);
-        $disabled = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(authenticationPolicies: ['ES' => []]), intermediates: [$intermediate['pem']]);
-        self::assertSame('not_qualified', $disabled->validate($client['pem'])->reason);
+        $restricted = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(profiles: ['restricted' => ['authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]]]), intermediates: [$intermediate['pem']]);
+        self::assertTrue($restricted->validate($client['pem'], profile: 'restricted')->valid);
+        $wrongPolicy = $pki->issue($subject, $intermediate, 'dnie_wrong_policy');
+        self::assertSame('authentication_policy_mismatch', $restricted->validate($wrongPolicy['pem'], profile: 'restricted')->reason);
 
         $noForeStore = new TrustStore($this->dir . '/trust');
         $noForeStore->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => false]], force: true);
         $noFore = new CertificateValidator(new CertificateParser(), $noForeStore, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), intermediates: [$intermediate['pem']]);
-        self::assertSame('not_qualified', $noFore->validate($client['pem'])->reason);
+        self::assertSame('untrusted', $noFore->validate($client['pem'])->reason);
+    }
+
+    public function testNamedProfilesSeparateDnieQualificationPersonTypesAndRevocation(): void
+    {
+        $pki = new TestPki();
+        $dnieRoot = $pki->issue(['CN' => 'AC RAIZ DNIE 2', 'C' => 'ES'], profile: 'ca');
+        $dnieIssuer = $pki->issue(['CN' => 'AC DNIE 004', 'C' => 'ES'], $dnieRoot, 'ca');
+        $fnmtRoot = $pki->issue(['CN' => 'AC FNMT Usuarios', 'C' => 'ES'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $entry = static fn(array $ca): array => ['pem' => $ca['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true];
+        $store->publish([
+            hash('sha256', TestPki::der($dnieRoot['pem'])) => $entry($dnieRoot),
+            hash('sha256', TestPki::der($fnmtRoot['pem'])) => $entry($fnmtRoot),
+        ]);
+        $subject = ['CN' => 'Citizen', 'serialNumber' => '12345678Z', 'C' => 'ES'];
+        $dnie = $pki->issue($subject, $dnieIssuer, 'dnie_no_eku');
+        $fnmt = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $fnmtRoot, 'client');
+        $representative = $pki->issue(['CN' => 'Representative', 'serialNumber' => 'IDCES-00000000T', 'organizationIdentifier' => 'VATES-B00000000', 'C' => 'ES'], $fnmtRoot, 'client');
+        $seal = $pki->issue(['CN' => 'Company', 'organizationIdentifier' => 'VATES-B00000000', 'C' => 'ES'], $fnmtRoot, 'client');
+        $transport = (new FakeTransport())
+            ->respond('http://ocsp.example.test/response', $pki->ocspResponse($dnie['pem'], $dnieIssuer))
+            ->respond('http://aia.example.test/issuer.crt', TestPki::der($dnieIssuer['pem']));
+        $options = new Options(profiles: [
+            'login' => ['countries' => ['ES'], 'dnie' => true, 'qualified_required' => false, 'person_types' => ['natural', 'representative'], 'soft_fail_revocation' => false],
+            'signature' => ['countries' => ['ES'], 'dnie' => true, 'qualified_required' => true, 'person_types' => ['natural', 'representative'], 'soft_fail_revocation' => false],
+            'onboarding' => ['countries' => ['ES'], 'dnie' => false, 'qualified_required' => false, 'person_types' => ['natural', 'representative'], 'soft_fail_revocation' => false],
+            'natural_only' => ['person_types' => ['natural']],
+            'seal' => ['person_types' => ['legal'], 'qualified_required' => true],
+            'soft' => ['soft_fail_revocation' => true],
+        ]);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), $options, aiaTransport: $transport);
+        self::assertTrue($validator->validate($dnie['pem'], profile: 'login')->valid);
+        self::assertSame('dnie_disabled_for_profile', $validator->validate($dnie['pem'], profile: 'onboarding')->reason);
+        self::assertSame('qualified_required', $validator->validate($dnie['pem'], profile: 'signature')->reason);
+        foreach (['login', 'signature', 'onboarding'] as $profile) {
+            $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($fnmt['pem'], $fnmtRoot));
+            self::assertTrue($validator->validate($fnmt['pem'], profile: $profile)->valid, $profile);
+        }
+        self::assertSame('person_type_not_allowed', $validator->validate($representative['pem'], profile: 'natural_only')->reason);
+        self::assertSame('person_type_not_allowed', $validator->validate($seal['pem'], profile: 'login')->reason);
+        $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($seal['pem'], $fnmtRoot));
+        self::assertTrue($validator->validate($seal['pem'], profile: 'seal')->valid);
+        self::assertSame('revocation_unavailable', $validator->validate($representative['pem'], profile: 'login')->reason);
+        self::assertTrue($validator->validate($representative['pem'], profile: 'soft')->valid);
+    }
+
+    public function testUnknownProfileIsConfigurationErrorBeforeCertificateParsing(): void
+    {
+        $validator = new CertificateValidator(new CertificateParser(), new TrustStore($this->dir . '/trust'), new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options());
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unknown eIDAS validation profile: absent');
+        $validator->validate('not a certificate', profile: 'absent');
     }
 
 }

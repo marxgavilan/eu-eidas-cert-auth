@@ -173,12 +173,12 @@ final class SecurityRegressionTest extends TestCase
             self::assertSame(1, $importer->importTsl(SignedLists::sign($xml, $signer), 'ES', [self::fingerprint($signer['pem'])])->count, $qualifier);
             self::assertArrayHasKey(self::fingerprint($ca['pem']), $store->certificates(), $qualifier);
             $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $ca));
-            $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
+            $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(requireQualified: true));
             self::assertTrue($validator->validate($client['pem'])->valid, $qualifier);
         }
         $matching = str_replace(['QCForLegalPerson', 'name="keyEncipherment"'], ['NotQualified', 'name="digitalSignature"'], $xml);
         $importer->importTsl(SignedLists::sign($matching, $signer), 'ES', [self::fingerprint($signer['pem'])]);
-        self::assertSame('not_qualified', $validator->validate($client['pem'])->reason);
+        self::assertSame('qualified_required', $validator->validate($client['pem'])->reason);
     }
 
     public function testStandaloneTslKeepsLotlSequenceAndIssueDate(): void

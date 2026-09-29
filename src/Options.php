@@ -20,13 +20,14 @@ final readonly class Options
         'd2064fdd70f6982dcc516b86d9d5c56aea939417c624b2e478c0b29de54f8474',
     ];
 
-    public const DEFAULT_AUTHENTICATION_POLICIES = ['ES' => ['2.16.724.1.2.2.2.4']];
+    public const DEFAULT_AUTHENTICATION_POLICIES = [];
 
     /**
      * @param list<string> $countries
      * @param list<string> $serviceTypes
      * @param list<string> $lotlSignerFingerprints
      * @param array<string, list<string>> $authenticationPolicies
+     * @param array<string, array<string, mixed>> $profiles
      */
     public function __construct(
         public string $region = 'ES',
@@ -35,11 +36,12 @@ final readonly class Options
         public array $lotlSignerFingerprints = self::OJ_FINGERPRINTS,
         public int $minimumRetentionPercent = 80,
         public int $timeoutSeconds = 15,
-        public bool $requireQualified = true,
+        public bool $requireQualified = false,
         public bool $softFailRevocation = false,
         public bool $requireForeSignatures = true,
         public int $maximumStoreAgeSeconds = 2592000,
         public array $authenticationPolicies = self::DEFAULT_AUTHENTICATION_POLICIES,
+        public array $profiles = [],
     ) {
         if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1) {
             throw new InvalidArgumentException('Invalid eIDAS options.');
@@ -61,11 +63,51 @@ final readonly class Options
                 }
             }
         }
+        foreach (array_keys($profiles) as $name) {
+            if (! is_string($name) || ! preg_match('/^[A-Za-z][A-Za-z0-9_-]*$/D', $name)) {
+                throw new InvalidArgumentException('Invalid eIDAS validation profile name.');
+            }
+            $this->profile($name);
+        }
     }
 
     /** @return list<string> */
     public function acceptedCountries(): array
     {
         return $this->countries === [] ? [$this->region] : $this->countries;
+    }
+
+    public function profile(string $name = 'default'): ValidationProfile
+    {
+        if ($name === '' || ($name !== 'default' && ! array_key_exists($name, $this->profiles))) {
+            throw new InvalidArgumentException("Unknown eIDAS validation profile: {$name}");
+        }
+        $settings = $this->profiles[$name] ?? [];
+        if (! is_array($settings)) {
+            throw new InvalidArgumentException("Invalid eIDAS validation profile: {$name}");
+        }
+        $allowed = ['countries', 'qualified_required', 'person_types', 'dnie', 'authentication_policies', 'soft_fail_revocation'];
+        foreach ($settings as $key => $value) {
+            if (! in_array($key, $allowed, true)) {
+                throw new InvalidArgumentException("Unknown eIDAS profile setting: {$key}");
+            }
+            if (in_array($key, ['qualified_required', 'dnie', 'soft_fail_revocation'], true) && ! is_bool($value)) {
+                throw new InvalidArgumentException("Invalid eIDAS profile setting: {$key}");
+            }
+        }
+        foreach (['countries', 'person_types', 'authentication_policies'] as $key) {
+            if (array_key_exists($key, $settings) && ! is_array($settings[$key])) {
+                throw new InvalidArgumentException("Invalid eIDAS profile setting: {$key}");
+            }
+        }
+
+        return new ValidationProfile(
+            countries: $settings['countries'] ?? $this->acceptedCountries(),
+            qualifiedRequired: $settings['qualified_required'] ?? $this->requireQualified,
+            personTypes: $settings['person_types'] ?? ['natural', 'representative'],
+            dnie: $settings['dnie'] ?? in_array('ES', $settings['countries'] ?? $this->acceptedCountries(), true),
+            authenticationPolicies: array_filter($settings['authentication_policies'] ?? $this->authenticationPolicies),
+            softFailRevocation: $settings['soft_fail_revocation'] ?? $this->softFailRevocation,
+        );
     }
 }

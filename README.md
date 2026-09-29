@@ -12,7 +12,7 @@ PHP 8.2+ with `curl`, `dom`, `libxml`, and `openssl`; the `openssl` executable i
 
 ## Trust-list import
 
-The default source is the [European LOTL](https://ec.europa.eu/tools/lotl/eu-lotl.xml). The default accepted country is the configured region (`ES`); other countries must be explicitly listed. Only configured `CA/QC` service types with a `granted` status and the `ForeSignatures` indication contribute CA certificates by default. ETSI `NotQualified` and `QCForLegalPerson` qualifiers describe certificates matching their criteria; they do not remove an entire CA service from the store. Validation applies their key-usage and certificate-policy criteria to the client certificate; unsupported criteria fail closed for that CA. Service history is used when evaluating an earlier date. Each certificate becomes `<sha256>.pem`; `bundle.pem` concatenates the current set. `manifest.json` records country, service type, publication time, list expiry and per-country sequence numbers.
+The default source is the [European LOTL](https://ec.europa.eu/tools/lotl/eu-lotl.xml). The default accepted country is the configured region (`ES`); other countries must be explicitly listed. Only configured `CA/QC` service types with a `granted` status and the `ForeSignatures` indication contribute CA certificates by default. ETSI `NotQualified` and `QCForLegalPerson` qualifiers describe certificates matching their criteria; they do not remove an entire CA service from the store. A profile requiring qualification applies their key-usage and certificate-policy criteria to the client certificate; unsupported criteria fail closed for qualification. Service history is used when evaluating an earlier date. Each certificate becomes `<sha256>.pem`; `bundle.pem` concatenates the current set. `manifest.json` records country, service type, publication time, list expiry and per-country sequence numbers.
 
 The LOTL signer must match a pinned SHA-256 fingerprint from [Official Journal C/2026/1944, 15 April 2026](https://eur-lex.europa.eu/eli/C/2026/1944/oj/eng). The six published fingerprints are defaults in `Options::OJ_FINGERPRINTS` and `config/eidas-cert-auth.php`. Review that notice and the [pivot mechanism](https://ec.europa.eu/tools/lotl/pivot-lotl-explanation.html) before changing pins; the package does not automatically follow pivot LOTLs. Each national TSL signer must match a certificate in the signed LOTL pointer for that country. A standalone TSL requires caller-supplied signer pins.
 
@@ -43,7 +43,7 @@ For a standalone TSL, obtain signer fingerprints from a separately verified LOTL
 
 ## Client validation and identity
 
-`CertificateValidator::validate()` returns a typed `ValidationResult` with `valid`, `reason`, `identity`, `certificate`, and `revocationSource`. It checks parsing, validity dates, every chain signature to a CA in the current store, CA constraints, digital-signature key usage, client-auth EKU when present, qualification policy, accepted country, a personal identifier, and revocation. OCSP is tried first; CRL is a verified fallback. Responses are verified by OpenSSL against the issuer, have timeouts, and are cached by SHA-256 certificate fingerprint. Unavailable revocation fails closed by default; `softFailRevocation` is an explicit policy choice.
+`CertificateValidator::validate()` returns a typed `ValidationResult` with `valid`, `reason`, `identity`, `certificate`, and `revocationSource`. It checks parsing, validity dates, every chain signature to a CA in the current store, CA constraints, client-auth EKU when present or digital-signature key usage when EKU is absent, profile qualification requirements, accepted country, a personal identifier, and revocation. OCSP is tried first; CRL is a verified fallback. Responses are verified by OpenSSL against the issuer, have timeouts, and are cached by SHA-256 certificate fingerprint. Unavailable revocation fails closed by default; `softFailRevocation` is an explicit policy choice.
 
 Identity extraction exposes given name, surnames, identifier, country, person type (`natural`, `representative`, `legal`), organization, organization identifier, representation, and identifier scheme. There are extractors for ES, PT, IT, FR, and DE, plus a generic ETSI EN 319 412-1 extractor for `IDC`, `PAS`, `TIN`, and `VAT` semantics. The Spanish extractor also handles `IDCES-`, `VATES-`, a bare DNI/NIE in `serialNumber` with a valid check letter, and a representative ID in a common name. These fields are claims in the certificate; applications must bind accounts by `(scheme, country, value)` and verify the intended person type, rather than matching `value` alone.
 
@@ -65,13 +65,50 @@ if (! $result->valid) {
 
 Revocation and AIA issuer URLs in client certificates can use HTTP. Transport forbids redirects, rejects private or reserved DNS answers, pins the resolved public address, and bounds download time and size; deploy egress filtering as well. For a process-wide revocation cache, inject your own `RevocationCache`. OCSP good responses require a recent thisUpdate and nextUpdate.
 
-### DNIe authentication
+### Authentication rule and profiles
 
-The [Spanish Police DNIe certification practice statement, version 3.2, sections 7.1.4 and 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) specifies authentication policy OID `2.16.724.1.2.2.2.4` (possibly followed by two version numbers), `digitalSignature`, no EKU extension, a bare DNI/NIE in `serialNumber`, and an AIA URL for the issuing CA. The default `authenticationPolicies` is `['ES' => ['2.16.724.1.2.2.2.4']]`; other countries have no authentication policy enabled. Set the country map explicitly with `new Options(authenticationPolicies: ['ES' => ['2.16.724.1.2.2.2.4']])`, or in Laravel's `authentication_policies` config. An empty list disables this exception for that country. Review policy OIDs and accepted countries with the application owner.
+The default `default` profile accepts a client certificate whose verified chain reaches an accepted CA/QC TSL anchor with `ForeSignatures`, and declares authentication use: a present EKU contains `clientAuth`, or an absent EKU is paired with keyUsage `digitalSignature`. It does not require QcCompliance or a particular certificate-policy OID. This is appropriate for authentication because the accepted anchors are qualified trust-service providers selected from signed TSLs; the leaf still has to declare authentication use and pass date, chain, country, identity and revocation checks. Requiring a qualified signature certificate for login would exclude the DNIe authentication certificate. A profile can impose stricter requirements for a particular route.
 
-With `requireQualified=true` (the default), a client certificate without QcCompliance passes this exception only when its certificate policy matches the configured OID or its two-number version, it has `digitalSignature`, and its verified chain ends at a current CA/QC trust-list entry in the same country carrying `ForeSignatures`. The TSL's `NotQualified`/`QCForLegalPerson` criteria still apply. A present EKU must contain `clientAuth`; an absent EKU places no additional restriction. QcCompliance remains required for certificates outside this narrow policy; DNIe does not require `requireQualified=false`.
+The [Spanish Police DNIe certification practice statement, version 3.2, sections 7.1.4 and 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) documents the authentication OID `2.16.724.1.2.2.2.4`, `digitalSignature`, no EKU, and a bare DNI/NIE `serialNumber`. The OID is **optional**: set `authentication_policies` only when the application needs to restrict a profile to those OIDs. For that DNIe OID, the documented two-number version suffix is accepted. The `dnie` switch identifies DNIe by the verified TSL anchor certificate subject containing `DNIE`, not by untrusted text in the leaf.
 
-The leaf often arrives without `AC DNIE 00x`. The validator fetches `caIssuers` from AIA over HTTP/HTTPS using the protected transport, limits the certificate response to 1 MB, and caches a successful download for one hour per validator instance. It verifies each intermediate's signature and CA constraints through to the TSL anchor; the download itself is never a trust anchor. For offline or controlled deployments, pass PEM strings via `new CertificateValidator(..., intermediates: [$issuerPem])` or Laravel's `intermediates` array. A trust-store generation created before this release lacks the recorded `ForeSignatures` flag and must be refreshed from signed lists for this exception to apply. Test with a real DNIe and your TLS proxy before enabling a login route; the generated PKI tests cover the documented certificate profile.
+Publish the Laravel config with `php artisan vendor:publish --tag=eidas-cert-auth-config` and set `profiles` there (or set `EIDAS_PROFILES` to the equivalent JSON object in `.env`). Example: DNIe only for login, qualified certificates for signing, and no DNIe for onboarding:
+
+```php
+'profiles' => [
+    'default' => [
+        'countries' => ['ES'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative'], 'dnie' => true,
+        'soft_fail_revocation' => false,
+    ],
+    'login' => [
+        'countries' => ['ES'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative'], 'dnie' => true,
+        'soft_fail_revocation' => false,
+    ],
+    'signature' => [
+        'countries' => ['ES'], 'qualified_required' => true,
+        'person_types' => ['natural', 'representative'], 'dnie' => false,
+        'soft_fail_revocation' => false,
+    ],
+    'onboarding' => [
+        'countries' => ['ES', 'PT'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative', 'legal'], 'dnie' => false,
+        'soft_fail_revocation' => false,
+    ],
+],
+```
+
+A qualified profile requires QcCompliance and applies the TSL's `NotQualified`/`QCForLegalPerson` criteria. `person_types` can include `natural`, `representative`, and `legal` (an entity seal with an organization identifier). A `legal` certificate still needs authentication usage. Set `authentication_policies` on a profile as a country-to-OID map, for example `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; omission means no OID restriction. `soft_fail_revocation` defaults to `false` per profile. Omitted fields inherit the global defaults; `default` is available without configuration, accepts ES and DNIe, and does not require qualification. Unknown names raise `InvalidArgumentException`. Distinct rejection reasons include `no_authentication_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch`, and `person_type_not_allowed`.
+
+```php
+// Laravel route using the eidas.cert alias registered by the provider:
+Route::post('/sign', $handler)->middleware('eidas.cert:signature');
+
+// Framework-free validator or Laravel facade:
+$result = $validator->validate($pemFromServerVariable, profile: 'signature');
+```
+
+The leaf often arrives without `AC DNIE 00x`. The validator fetches `caIssuers` from AIA over HTTP/HTTPS using the protected transport, limits the certificate response to 1 MB, and caches a successful download for one hour per validator instance. It verifies each intermediate's signature and CA constraints through to the TSL anchor; the download itself is never a trust anchor. For offline or controlled deployments, pass PEM strings via `new CertificateValidator(..., intermediates: [$issuerPem])` or Laravel's `intermediates` array. Refresh older stores from signed lists to record `ForeSignatures` before using non-qualified authentication certificates.
 
 ## TLS termination: `optional_no_ca`
 
@@ -108,7 +145,7 @@ SSLOptions +StdEnvVars +ExportCertData
 
 ## Laravel
 
-The provider auto-registers when Laravel is installed. Publish configuration with `php artisan vendor:publish --tag=eidas-cert-auth-config`. Set `EIDAS_STORE_PATH`, `EIDAS_REGION`, and optionally `EIDAS_COUNTRIES` (comma separated). In the published config, set `service_types`, `minimum_retention_percent`, signer pins, `require_qualified`, `authentication_policies`, `soft_fail_revocation`, and an optional `revocation_cache_store`, `intermediates` and `maximum_store_age_seconds` to your policy. Laravel uses its cache for revocation results. `schedule_daily=true` registers `eidas:trust-list:update` daily by default; set it to `false` if your application schedules updates itself. The application still needs its normal scheduler trigger.
+The provider auto-registers when Laravel is installed. Publish configuration with `php artisan vendor:publish --tag=eidas-cert-auth-config`. Set `EIDAS_STORE_PATH`, `EIDAS_REGION`, and optionally `EIDAS_COUNTRIES` (comma separated). In the published config, set `service_types`, `minimum_retention_percent`, signer pins, `profiles`, optional global `authentication_policies`, `soft_fail_revocation`, and an optional `revocation_cache_store`, `intermediates` and `maximum_store_age_seconds` to your policy. Laravel uses its cache for revocation results. `schedule_daily=true` registers `eidas:trust-list:update` daily by default; set it to `false` if your application schedules updates itself. The application still needs its normal scheduler trigger.
 
 ```bash
 php artisan eidas:trust-list:update --dry-run

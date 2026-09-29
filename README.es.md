@@ -10,7 +10,7 @@ Requiere PHP 8.2+, extensiones `curl`, `dom`, `libxml`, `openssl` y el ejecutabl
 
 La fuente por defecto es la [LOTL europea](https://ec.europa.eu/tools/lotl/eu-lotl.xml). Se comprueba su firma XMLDSig con las seis huellas SHA-256 del [Diario Oficial C/2026/1944, de 15 de abril de 2026](https://eur-lex.europa.eu/eli/C/2026/1944/oj/eng), configuradas en `Options::OJ_FINGERPRINTS`. Después se sigue únicamente cada puntero XML a una TSL de un país aceptado y se verifica que la firma usa un certificado anunciado en la LOTL. Los cambios futuros de certificados de la LOTL requieren revisar el [mecanismo de pivote](https://ec.europa.eu/tools/lotl/pivot-lotl-explanation.html) y actualizar las huellas de forma controlada: el paquete no sigue pivotes automáticamente.
 
-Por defecto solo se acepta el país de `region` (`ES`); configure `countries` para ampliar la selección. Se importan por defecto certificados CA de servicios `CA/QC` con estado `granted` e indicación `ForeSignatures`, considerando el historial de estados. Los calificadores ETSI `NotQualified` y `QCForLegalPerson` describen los certificados que cumplen sus criterios; no excluyen el servicio CA completo. La validación aplica los criterios de uso de clave y política de certificado al certificado cliente; los criterios no admitidos fallan en cerrado para esa CA. Se crea un PEM por huella, `bundle.pem` y `manifest.json`.
+Por defecto solo se acepta el país de `region` (`ES`); configure `countries` para ampliar la selección. Se importan por defecto certificados CA de servicios `CA/QC` con estado `granted` e indicación `ForeSignatures`, considerando el historial de estados. Los calificadores ETSI `NotQualified` y `QCForLegalPerson` describen los certificados que cumplen sus criterios; no excluyen el servicio CA completo. Un perfil que exige cualificación aplica esos criterios de uso de clave y política al certificado cliente; los criterios no admitidos impiden reconocerlo como cualificado. Se crea un PEM por huella, `bundle.pem` y `manifest.json`.
 
 ```bash
 mkdir -p /path/to/private-data
@@ -25,7 +25,7 @@ La TSL suelta se importa con `TrustListImporter::importTsl($xml, 'ES', $huellasF
 
 ## Validación e identidad
 
-`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate` y `revocationSource`. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, keyUsage de firma digital, EKU de autenticación cliente cuando existe, política de cualificación, país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
+`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate` y `revocationSource`. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, EKU `clientAuth` cuando existe o keyUsage `digitalSignature` si no hay EKU, requisitos del perfil, país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
 
 Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-`, un DNI/NIE sin prefijo en `serialNumber` con letra de control válida y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador debe vincular usuarios por `(scheme, country, value)` y comprobar el tipo de persona, no solo el valor.
 
@@ -42,13 +42,50 @@ $preview = $importer->importLotl(dryRun: true);
 
 Para construir el validador sin Laravel, consulte el ejemplo completo del [README en inglés](README.md#client-validation-and-identity). `FakeTransport` permite pruebas sin red.
 
-### Autenticación con DNIe
+### Criterio de autenticación y perfiles
 
-La [Declaración de Prácticas de Certificación de la Policía, versión 3.2, apartados 7.1.4 y 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) especifica para el certificado de autenticación el OID `2.16.724.1.2.2.2.4` (con posible sufijo de dos números de versión), `digitalSignature`, ausencia de EKU, DNI/NIE sin prefijo en `serialNumber` y una URL AIA de la CA emisora. `authenticationPolicies` vale por defecto `['ES' => ['2.16.724.1.2.2.2.4']]`; para otros países no hay políticas configuradas. Puede cambiar la lista por país con `new Options(authenticationPolicies: ['ES' => ['2.16.724.1.2.2.2.4']])` o mediante `authentication_policies` en Laravel. Una lista vacía desactiva esta excepción para ese país. Revise los OID y países aceptados con el responsable de la aplicación.
+El perfil `default` acepta un certificado cuya cadena verificada llega a un ancla CA/QC aceptada de una TSL firmada con `ForeSignatures`, y declara uso de autenticación: EKU con `clientAuth`, o ausencia de EKU junto con keyUsage `digitalSignature`. No exige QcCompliance ni un OID de política concreto. El fundamento es que las anclas aceptadas pertenecen a prestadores cualificados de la TSL; la hoja aún debe declarar uso de autenticación y superar fechas, cadena, país, identidad y revocación. El certificado de autenticación del DNIe puede así entrar en login sin exigirle propiedades de firma cualificada.
 
-`requireQualified` sigue en `true`. Un certificado sin QcCompliance solo pasa si lleva la política configurada, tiene `digitalSignature` y su cadena verificada llega a una entrada actual CA/QC del mismo país con `ForeSignatures` en la TSL. Se siguen aplicando los criterios `NotQualified`/`QCForLegalPerson` de la TSL. Si hay EKU, debe incluir `clientAuth`; si no lo hay, no impone otra restricción. Los certificados fuera de esta política siguen necesitando QcCompliance. Para DNIe no desactive `requireQualified` de forma global.
+La [DPC de la Policía, versión 3.2, apartados 7.1.4 y 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) documenta el OID `2.16.724.1.2.2.2.4`, `digitalSignature`, ausencia de EKU y DNI/NIE sin prefijo en `serialNumber`. El OID es una restricción **opcional** del perfil mediante `authentication_policies`; para ese OID se admite el sufijo documentado de dos componentes de versión. El interruptor `dnie` reconoce el DNIe por el sujeto del ancla TSL verificada que contiene `DNIE`, nunca por texto de la hoja.
 
-Normalmente nginx solo entrega la hoja; `AC DNIE 00x` puede obtenerse desde AIA `caIssuers` por HTTP/HTTPS. Se emplea el transporte protegido usado para revocación (sin redirecciones, bloqueo de destinos privados/reservados, IP fijada, límites de tamaño y tiempo), con límite de 1 MB para la respuesta de certificado y caché de una hora por instancia del validador. La intermedia descargada debe encadenar criptográficamente hasta el ancla TSL. Alternativamente, cargue certificados PEM por `new CertificateValidator(..., intermediates: [$issuerPem])` o el array Laravel `intermediates`. Si el almacén se creó antes de esta versión, actualícelo desde las listas firmadas para registrar `ForeSignatures`. Pruebe el flujo con un DNIe real y el proxy TLS de su aplicación; los tests generan una PKI que reproduce el perfil documentado.
+Publique la configuración Laravel con `php artisan vendor:publish --tag=eidas-cert-auth-config` y defina `profiles`, o use `EIDAS_PROFILES` con el objeto JSON equivalente en `.env`. Ejemplo de «DNIe solo para login», «firma solo cualificados» y onboarding sin DNIe:
+
+```php
+'profiles' => [
+    'default' => [
+        'countries' => ['ES'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative'], 'dnie' => true,
+        'soft_fail_revocation' => false,
+    ],
+    'login' => [
+        'countries' => ['ES'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative'], 'dnie' => true,
+        'soft_fail_revocation' => false,
+    ],
+    'signature' => [
+        'countries' => ['ES'], 'qualified_required' => true,
+        'person_types' => ['natural', 'representative'], 'dnie' => false,
+        'soft_fail_revocation' => false,
+    ],
+    'onboarding' => [
+        'countries' => ['ES', 'PT'], 'qualified_required' => false,
+        'person_types' => ['natural', 'representative', 'legal'], 'dnie' => false,
+        'soft_fail_revocation' => false,
+    ],
+],
+```
+
+Un perfil cualificado exige QcCompliance y aplica los criterios `NotQualified`/`QCForLegalPerson` de la TSL. `person_types` admite `natural`, `representative` y `legal` (sello de entidad con identificador de organización). También se exige uso de autenticación al sello. Para restringir políticas, añada al perfil `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; si se omite, no se exige OID. `soft_fail_revocation` vale `false` por defecto. Los campos omitidos heredan los valores globales; `default` existe sin configuración, acepta ES y DNIe y no exige cualificación. Un nombre inexistente lanza `InvalidArgumentException`. Los motivos de rechazo distinguen `no_authentication_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch` y `person_type_not_allowed`.
+
+```php
+// Ruta Laravel con el alias eidas.cert registrado por el proveedor:
+Route::post('/firmar', $handler)->middleware('eidas.cert:signature');
+
+// Núcleo sin Laravel o fachada Laravel:
+$resultado = $validator->validate($pemDeVariableServidor, profile: 'signature');
+```
+
+Si la hoja llega sin `AC DNIE 00x`, el validador obtiene la intermedia por AIA `caIssuers` mediante transporte protegido, limita la respuesta a 1 MB y la guarda una hora por instancia. Verifica su firma y restricciones de CA hasta el ancla TSL; la descarga no se convierte en ancla. Puede suministrar PEM mediante `new CertificateValidator(..., intermediates: [$issuerPem])` o `intermediates` en Laravel. Actualice los almacenes antiguos desde listas firmadas para registrar `ForeSignatures` antes de aceptar autenticación sin QcCompliance.
 
 ## Terminación TLS con `optional_no_ca`
 
@@ -85,7 +122,7 @@ Con PHP-FPM hay que configurar y comprobar la transferencia explícita de la var
 
 ## Laravel
 
-El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluidos `authentication_policies`, `revocation_cache_store`, `intermediates` y `maximum_store_age_seconds`. Laravel usa su caché para los resultados de revocación. `schedule_daily=true` programa el comando a diario por defecto; póngalo a `false` si la aplicación programa las actualizaciones por su cuenta. La aplicación necesita activar su disparador habitual del scheduler.
+El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluidos `profiles`, `authentication_policies`, `revocation_cache_store`, `intermediates` y `maximum_store_age_seconds`. Laravel usa su caché para los resultados de revocación. `schedule_daily=true` programa el comando a diario por defecto; póngalo a `false` si la aplicación programa las actualizaciones por su cuenta. La aplicación necesita activar su disparador habitual del scheduler.
 
 ```bash
 php artisan eidas:trust-list:update --dry-run

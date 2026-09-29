@@ -8,6 +8,7 @@ use Iberfacil\EidasCertAuth\Cache\InMemoryRevocationCache;
 use Iberfacil\EidasCertAuth\Certificate\CertificateValidator;
 use Iberfacil\EidasCertAuth\Contracts\RevocationCache;
 use Iberfacil\EidasCertAuth\Laravel\EidasCertAuthServiceProvider;
+use Iberfacil\EidasCertAuth\Laravel\Middleware\ValidateClientCertificate;
 use Iberfacil\EidasCertAuth\Options;
 use Iberfacil\EidasCertAuth\Trust\TrustStore;
 use Illuminate\Console\Scheduling\Event;
@@ -18,6 +19,31 @@ use PHPUnit\Framework\TestCase;
 
 final class LaravelWiringTest extends TestCase
 {
+    public function testProviderRegistersNamedMiddlewareAlias(): void
+    {
+        $router = new class {
+            /** @var array<string, string> */
+            public array $aliases = [];
+
+            public function aliasMiddleware(string $name, string $class): void
+            {
+                $this->aliases[$name] = $class;
+            }
+        };
+        $config = new class {
+            public function get(string $key, mixed $default = null): mixed
+            {
+                return $key === 'eidas-cert-auth.schedule_daily' ? false : $default;
+            }
+        };
+        $app = $this->createMock(Application::class);
+        $app->method('bound')->with('router')->willReturn(true);
+        $app->method('make')->willReturnCallback(static fn(string $abstract): mixed => $abstract === 'router' ? $router : $config);
+        $app->method('runningInConsole')->willReturn(false);
+        (new EidasCertAuthServiceProvider($app))->boot();
+        self::assertSame(ValidateClientCertificate::class, $router->aliases['eidas.cert']);
+    }
+
     public function testDailyScheduleAndThirtyDayStoreAgeAreDefaults(): void
     {
         self::assertSame(2592000, (new Options())->maximumStoreAgeSeconds);
@@ -53,6 +79,7 @@ final class LaravelWiringTest extends TestCase
             'eidas-cert-auth.maximum_store_age_seconds' => 12345,
             'eidas-cert-auth.intermediates' => ['test-intermediate'],
             'eidas-cert-auth.authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']],
+            'eidas-cert-auth.profiles' => ['signature' => ['qualified_required' => true, 'dnie' => false]],
         ];
         $config = new class ($values) {
             /** @param array<string, mixed> $values */
@@ -89,6 +116,8 @@ final class LaravelWiringTest extends TestCase
         self::assertSame(12345, $options->maximumStoreAgeSeconds);
         self::assertTrue($options->requireForeSignatures);
         self::assertSame(['ES' => ['2.16.724.1.2.2.2.4']], $options->authenticationPolicies);
+        self::assertTrue($options->profile('signature')->qualifiedRequired);
+        self::assertFalse($options->profile('signature')->dnie);
         $validator = $bindings[CertificateValidator::class]($app);
         self::assertInstanceOf(CertificateValidator::class, $validator);
         self::assertSame(['test-intermediate'], (new \ReflectionProperty($validator, 'intermediates'))->getValue($validator));

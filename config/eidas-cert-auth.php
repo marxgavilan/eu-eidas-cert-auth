@@ -12,8 +12,12 @@ return [
     'store_path' => env('EIDAS_STORE_PATH', storage_path('app/eidas-trust')),
     'minimum_retention_percent' => (int) env('EIDAS_MINIMUM_RETENTION', 80),
     'timeout_seconds' => (int) env('EIDAS_TIMEOUT', 15),
-    'require_qualified' => (bool) env('EIDAS_REQUIRE_QUALIFIED', true),
+    'require_qualified' => (bool) env('EIDAS_REQUIRE_QUALIFIED', false),
     'authentication_policies' => Options::DEFAULT_AUTHENTICATION_POLICIES,
+    // Each named profile may override countries, qualified_required, person_types,
+    // dnie, authentication_policies (country => OIDs), and soft_fail_revocation.
+    // EIDAS_PROFILES may contain a JSON object with the same structure.
+    'profiles' => json_decode((string) env('EIDAS_PROFILES', '{}'), true, flags: JSON_THROW_ON_ERROR),
     'require_fore_signatures' => true,
     'maximum_store_age_seconds' => 2592000,
     'intermediates' => [],
