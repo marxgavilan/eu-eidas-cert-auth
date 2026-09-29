@@ -57,11 +57,11 @@ final readonly class RevocationChecker
                 }
                 $body = $this->transport->post($url, $request, 'application/ocsp-request', $this->timeoutSeconds);
                 file_put_contents($dir . '/resp.der', $body);
-                $verified = $this->run(['ocsp', '-respin', $dir . '/resp.der', '-issuer', $dir . '/issuer.pem', '-cert', $dir . '/cert.pem', '-CAfile', $dir . '/issuer.pem', '-partial_chain', '-no_nonce']);
+                $verified = $this->run(['ocsp', '-respin', $dir . '/resp.der', '-issuer', $dir . '/issuer.pem', '-cert', $dir . '/cert.pem', '-CAfile', $dir . '/issuer.pem', '-partial_chain', '-no_nonce', '-status_age', '86400', '-resp_text']);
                 if ($verified['code'] !== 0 || ! str_contains($verified['output'], 'Response verify OK')) {
                     continue;
                 }
-                if (preg_match('/cert\.pem:\s*(good|revoked)\b/', $verified['output'], $matches)) {
+                if (preg_match('/cert\.pem:[^\r\n]*\b(good|revoked)\b[^\r\n]*\R(?:\s*Revocation Time:[^\r\n]*\R)?\s*This Update:[^\r\n]*\R\s*Next Update:/', $verified['output'], $matches)) {
                     return ['status' => $matches[1], 'source' => 'ocsp'];
                 }
             } catch (Throwable) {

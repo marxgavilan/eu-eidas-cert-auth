@@ -38,6 +38,10 @@ final readonly class CertificateValidator
         if ($parsed->notAfter <= $at) {
             return ValidationResult::reject('expired', $parsed);
         }
+        $leafDetails = @openssl_x509_parse($parsed->pem);
+        if (! is_array($leafDetails) || self::weakSignature($leafDetails)) {
+            return ValidationResult::reject('untrusted', $parsed);
+        }
         $issuer = $this->issuer($parsed, $at);
         if ($issuer === null) {
             return ValidationResult::reject('untrusted', $parsed);
@@ -83,13 +87,13 @@ final readonly class CertificateValidator
         $direct = null;
         for ($depth = 0; $depth < 5; $depth++) {
             foreach ($anchors as $anchor) {
-                if (self::signedBy($current, $anchor, $at)) {
+                if (self::signedBy($current, $anchor, $at, $depth)) {
                     return $direct ?? $anchor;
                 }
             }
             $next = null;
             foreach ($pool as $pem) {
-                if (self::signedBy($current, $pem, $at)) {
+                if (self::signedBy($current, $pem, $at, $depth)) {
                     $next = $pem;
                     break;
                 }
@@ -104,15 +108,24 @@ final readonly class CertificateValidator
         return null;
     }
 
-    private static function signedBy(string $child, string $issuer, DateTimeImmutable $at): bool
+    private static function signedBy(string $child, string $issuer, DateTimeImmutable $at, int $depth): bool
     {
         $c = @openssl_x509_parse($child);
         $i = @openssl_x509_parse($issuer);
-        if (! is_array($c) || ! is_array($i) || ($c['issuer'] ?? null) != ($i['subject'] ?? null) || ! str_contains((string) ($i['extensions']['basicConstraints'] ?? ''), 'CA:TRUE') || (int) ($i['validFrom_time_t'] ?? 0) > $at->getTimestamp() || (int) ($i['validTo_time_t'] ?? 0) < $at->getTimestamp()) {
+        if (! is_array($c) || ! is_array($i) || ($c['issuer'] ?? null) != ($i['subject'] ?? null) || ! str_contains((string) ($i['extensions']['basicConstraints'] ?? ''), 'CA:TRUE') || ! str_contains((string) ($i['extensions']['keyUsage'] ?? ''), 'Certificate Sign') || self::weakSignature($c) || self::weakSignature($i) || (int) ($i['validFrom_time_t'] ?? 0) > $at->getTimestamp() || (int) ($i['validTo_time_t'] ?? 0) < $at->getTimestamp()) {
+            return false;
+        }
+        if (preg_match('/pathlen:(\d+)/i', (string) ($i['extensions']['basicConstraints'] ?? ''), $match) && $depth > (int) $match[1]) {
             return false;
         }
         $key = @openssl_pkey_get_public($issuer);
 
         return $key !== false && @openssl_x509_verify($child, $key) === 1;
+    }
+
+    /** @param array<string, mixed> $details */
+    private static function weakSignature(array $details): bool
+    {
+        return preg_match('/(?:md5|sha1)/i', (string) ($details['signatureTypeSN'] ?? '')) === 1;
     }
 }

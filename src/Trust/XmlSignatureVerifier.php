@@ -36,7 +36,7 @@ final class XmlSignatureVerifier
             throw new TrustListRejected('Unsigned, oversized or unsafe trusted list.');
         }
         $document = new DOMDocument();
-        if (! @$document->loadXML($xml, LIBXML_NONET) || ! $document->documentElement instanceof DOMElement) {
+        if (! @$document->loadXML($xml, LIBXML_NONET) || $document->doctype !== null || ! $document->documentElement instanceof DOMElement) {
             throw new TrustListRejected('Invalid trusted-list XML.');
         }
         $xpath = new DOMXPath($document);
@@ -114,6 +114,7 @@ final class XmlSignatureVerifier
         if (! is_array($cert) || (int) ($cert['validFrom_time_t'] ?? 0) > time() || (int) ($cert['validTo_time_t'] ?? 0) < time()) {
             throw new TrustListRejected('The signature certificate is invalid or expired.');
         }
+        $signedRootBytes = null;
         try {
             $signature = new XMLSecurityDSig();
             $signature->locateSignature($document);
@@ -140,6 +141,9 @@ final class XmlSignatureVerifier
                 if (! is_string($canonicalData) || ! $signature->validateDigest($reference, $canonicalData)) {
                     throw new TrustListRejected('Signed content has changed.');
                 }
+                if ($uri === '' || $root->getAttribute('Id') === substr($uri, 1)) {
+                    $signedRootBytes = $canonicalData;
+                }
             }
             if (in_array($signatureAlgorithm, [self::RSA_PSS_SHA256, self::RSA_PSS_SHA384, self::RSA_PSS_SHA512], true)) {
                 $valueNode = self::first($xpath, './ds:SignatureValue', $signatureNode);
@@ -163,7 +167,12 @@ final class XmlSignatureVerifier
             throw new TrustListRejected('Invalid XML signature.', 0, $exception);
         }
 
-        return $document;
+        $signedDocument = new DOMDocument();
+        if ($signedRootBytes === null || ! @$signedDocument->loadXML($signedRootBytes, LIBXML_NONET) || $signedDocument->doctype !== null) {
+            throw new TrustListRejected('Cannot parse verified signed content.');
+        }
+
+        return $signedDocument;
     }
 
     private static function first(DOMXPath $xpath, string $query, ?DOMNode $context = null): ?DOMElement

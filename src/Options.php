@@ -34,9 +34,18 @@ final readonly class Options
         public int $timeoutSeconds = 15,
         public bool $requireQualified = true,
         public bool $softFailRevocation = false,
+        public bool $requireForeSignatures = true,
+        public int $maximumStoreAgeSeconds = 604800,
     ) {
-        if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1) {
+        if (! preg_match('/^[A-Z]{2}$/', $region) || $minimumRetentionPercent < 0 || $minimumRetentionPercent > 100 || $timeoutSeconds < 1 || $maximumStoreAgeSeconds < 1) {
             throw new InvalidArgumentException('Invalid eIDAS options.');
+        }
+        $seen = [];
+        foreach ($countries as $country) {
+            if (! is_string($country) || ! preg_match('/^[A-Z]{2}$/', $country) || isset($seen[$country])) {
+                throw new InvalidArgumentException('Invalid accepted country.');
+            }
+            $seen[$country] = true;
         }
     }
 

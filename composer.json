@@ -23,7 +23,9 @@
   },
   "suggest": {
     "illuminate/support": "Laravel service provider, middleware and commands.",
-    "illuminate/console": "Laravel Artisan commands."
+    "illuminate/console": "Laravel Artisan commands.",
+    "illuminate/http": "Laravel middleware request support.",
+    "symfony/http-kernel": "Laravel middleware exception support."
   },
   "autoload": {"psr-4": {"Iberfacil\\EidasCertAuth\\": "src/"}},
   "autoload-dev": {"psr-4": {"Iberfacil\\EidasCertAuth\\Tests\\": "tests/"}},

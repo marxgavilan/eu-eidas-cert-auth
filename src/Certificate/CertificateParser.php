@@ -30,7 +30,7 @@ final class CertificateParser
         }
         $extensions = is_array($details['extensions'] ?? null) ? $details['extensions'] : [];
         $qc = $extensions['qcStatements'] ?? '';
-        $qualified = is_string($qc) && (str_contains($qc, "\x06\x06\x04\x00\x8e\x46\x01\x01") || str_contains($qc, '0.4.0.1862.1.1'));
+        $qualified = is_string($qc) && self::hasQcCompliance($qc);
 
         return new ParsedCertificate(
             $pem,
@@ -45,6 +45,57 @@ final class CertificateParser
             self::urls((string) ($extensions['authorityInfoAccess'] ?? ''), 'OCSP - URI:'),
             self::urls((string) ($extensions['crlDistributionPoints'] ?? ''), 'URI:'),
         );
+    }
+
+    private static function hasQcCompliance(string $der): bool
+    {
+        $offset = 0;
+        $outer = self::readTlv($der, $offset);
+        if ($outer === null || $outer['tag'] !== 0x30 || $offset !== strlen($der)) {
+            return false;
+        }
+        $statements = $outer['value'];
+        $offset = 0;
+        while ($offset < strlen($statements)) {
+            $statement = self::readTlv($statements, $offset);
+            if ($statement === null || $statement['tag'] !== 0x30) {
+                return false;
+            }
+            $innerOffset = 0;
+            $oid = self::readTlv($statement['value'], $innerOffset);
+            if ($oid !== null && $oid['tag'] === 0x06 && $oid['value'] === "\x04\x00\x8e\x46\x01\x01") {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return array{tag: int, value: string}|null */
+    private static function readTlv(string $der, int &$offset): ?array
+    {
+        if ($offset + 2 > strlen($der)) {
+            return null;
+        }
+        $tag = ord($der[$offset++]);
+        $length = ord($der[$offset++]);
+        if ($length & 0x80) {
+            $bytes = $length & 0x7f;
+            if ($bytes === 0 || $bytes > 4 || $offset + $bytes > strlen($der)) {
+                return null;
+            }
+            $length = 0;
+            for ($i = 0; $i < $bytes; $i++) {
+                $length = ($length << 8) | ord($der[$offset++]);
+            }
+        }
+        if ($offset + $length > strlen($der)) {
+            return null;
+        }
+        $value = substr($der, $offset, $length);
+        $offset += $length;
+
+        return ['tag' => $tag, 'value' => $value];
     }
 
     /** @return list<string> */

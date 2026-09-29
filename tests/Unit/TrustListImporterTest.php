@@ -127,4 +127,15 @@ final class TrustListImporterTest extends TestCase
         $this->expectException(TrustListRejected::class);
         $importer->importTsl(str_replace('granted', 'withdrawn', $xml), 'ES', $pins, dryRun: true);
     }
+    public function testNonCaServiceCertificateCannotBecomeAnchor(): void
+    {
+        $pki = new TestPki();
+        $signer = $pki->issue(['CN' => 'Signer']);
+        $notCa = $pki->issue(['CN' => 'Not a CA']);
+        $signed = SignedLists::sign(SignedLists::tsl('ES', [$notCa['pem']]), $signer);
+        $importer = new TrustListImporter(new FakeTransport(), new XmlSignatureVerifier(), new TrustStore($this->dir . '/trust'), new Options());
+        $this->expectException(TrustListRejected::class);
+        $importer->importTsl($signed, 'ES', [hash('sha256', TestPki::der($signer['pem']))]);
+    }
+
 }

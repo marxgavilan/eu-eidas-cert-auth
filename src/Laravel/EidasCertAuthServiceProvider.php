@@ -38,9 +38,11 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
                 timeoutSeconds: (int) $config->get('eidas-cert-auth.timeout_seconds', 15),
                 requireQualified: (bool) $config->get('eidas-cert-auth.require_qualified', true),
                 softFailRevocation: (bool) $config->get('eidas-cert-auth.soft_fail_revocation', false),
+                requireForeSignatures: (bool) $config->get('eidas-cert-auth.require_fore_signatures', true),
+                maximumStoreAgeSeconds: (int) $config->get('eidas-cert-auth.maximum_store_age_seconds', 604800),
             );
         });
-        $this->app->singleton(TrustStore::class, static fn(Application $app): TrustStore => new TrustStore((string) $app->make('config')->get('eidas-cert-auth.store_path'), $app->make(Options::class)->minimumRetentionPercent));
+        $this->app->singleton(TrustStore::class, static fn(Application $app): TrustStore => new TrustStore((string) $app->make('config')->get('eidas-cert-auth.store_path'), $app->make(Options::class)->minimumRetentionPercent, $app->make(Options::class)->maximumStoreAgeSeconds));
         $this->app->bindIf(Transport::class, static fn(): Transport => new CurlTransport());
         $this->app->bindIf(RevocationCache::class, static function (Application $app): RevocationCache {
             $configured = $app->make('config')->get('eidas-cert-auth.revocation_cache_store');
@@ -49,7 +51,7 @@ final class EidasCertAuthServiceProvider extends ServiceProvider
             return new LaravelRevocationCache($cache);
         });
         $this->app->singleton(TrustListImporter::class, static fn(Application $app): TrustListImporter => new TrustListImporter($app->make(Transport::class), new XmlSignatureVerifier(), $app->make(TrustStore::class), $app->make(Options::class)));
-        $this->app->singleton(CertificateValidator::class, static fn(Application $app): CertificateValidator => new CertificateValidator(new CertificateParser(), $app->make(TrustStore::class), new RevocationChecker(new CurlTransport(true), $app->make(RevocationCache::class)), $app->make(Options::class)));
+        $this->app->singleton(CertificateValidator::class, static fn(Application $app): CertificateValidator => new CertificateValidator(new CertificateParser(), $app->make(TrustStore::class), new RevocationChecker(new CurlTransport(true), $app->make(RevocationCache::class)), $app->make(Options::class), intermediates: array_values(array_filter((array) $app->make('config')->get('eidas-cert-auth.intermediates', []), 'is_string'))));
         $this->app->alias(CertificateValidator::class, 'eidas-cert-auth');
     }
 

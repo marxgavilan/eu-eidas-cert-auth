@@ -28,7 +28,7 @@ final class CertificateValidatorTest extends TestCase
     protected function tearDown(): void
     {
         foreach (glob($this->dir . '/.trust.*') ?: [] as $generation) {
-            if (is_link($generation)) {
+            if (is_link($generation) || is_file($generation)) {
                 unlink($generation);
             } elseif (is_dir($generation)) {
                 foreach (glob($generation . '/*') ?: [] as $file) {
@@ -118,4 +118,60 @@ final class CertificateValidatorTest extends TestCase
         self::assertSame('cache:crl', $second->revocationSource);
         self::assertCount(2, $transport->sent);
     }
+    public function testValidationFailureReasonsAndSoftFailPolicy(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Root'], profile: 'ca', days: 3650);
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $transport = new FakeTransport();
+        $strict = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
+        $subject = ['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
+        $client = $pki->issue($subject, $root, 'client');
+        self::assertSame('not_yet_valid', $strict->validate($client['pem'], new DateTimeImmutable('-1 day'))->reason);
+        self::assertSame('revocation_unavailable', $strict->validate($client['pem'])->reason);
+        $soft = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(softFailRevocation: true));
+        self::assertTrue($soft->validate($client['pem'])->valid);
+        self::assertSame('not_qualified', $strict->validate($pki->issue($subject, $root, 'client_no_qc')['pem'])->reason);
+        self::assertSame('not_qualified', $strict->validate($pki->issue($subject, $root, 'client_fake_qc')['pem'])->reason);
+        self::assertSame('country_not_accepted', $strict->validate($pki->issue(['CN' => 'PT', 'serialNumber' => 'TINPT-123', 'C' => 'PT'], $root, 'client')['pem'])->reason);
+        self::assertSame('no_personal_identity', $strict->validate($pki->issue(['CN' => 'Company', 'C' => 'ES'], $root, 'client')['pem'])->reason);
+        self::assertSame('untrusted', $strict->validate($pki->issue($subject, $root, 'client', digest: 'sha1')['pem'])->reason);
+        $leafIssuer = $pki->issue(['CN' => 'Leaf issuer'], $root, 'client');
+        self::assertSame('untrusted', $strict->validate($pki->issue($subject, $leafIssuer, 'client')['pem'])->reason);
+        $intermediate = $pki->issue(['CN' => 'Intermediate'], $root, 'ca');
+        self::assertSame('untrusted', $strict->validate($pki->issue($subject, $intermediate, 'client')['pem'])->reason);
+    }
+
+    public function testRevokedCrlAndCaKeyUsageAreRejected(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Root'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
+        $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', 'invalid')->respond('http://crl.example.test/list.crl', $pki->crl($client['pem'], $root, true));
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
+        self::assertSame('revoked', $validator->validate($client['pem'])->reason);
+        $badCa = $pki->issue(['CN' => 'No certificate signing'], profile: 'ca_no_sign');
+        $store->publish([hash('sha256', TestPki::der($badCa['pem'])) => ['pem' => $badCa['pem'], 'country' => 'ES', 'service' => 'CA/QC']], force: true);
+        self::assertSame('untrusted', $validator->validate($pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $badCa, 'client')['pem'])->reason);
+        $limitedRoot = $pki->issue(['CN' => 'Path length zero'], profile: 'ca_pathlen0');
+        $intermediate = $pki->issue(['CN' => 'Intermediate'], $limitedRoot, 'ca');
+        $store->publish([hash('sha256', TestPki::der($limitedRoot['pem'])) => ['pem' => $limitedRoot['pem'], 'country' => 'ES', 'service' => 'CA/QC']], force: true);
+        $withIntermediate = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(), intermediates: [$intermediate['pem']]);
+        self::assertSame('untrusted', $withIntermediate->validate($pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $intermediate, 'client')['pem'])->reason);
+    }
+    public function testExpiredAnchorRejectsOtherwiseValidClient(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Short lived CA'], profile: 'ca', days: 0);
+        $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $root, 'client');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'CA/QC']]);
+        usleep(1_100_000);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options());
+        self::assertSame('untrusted', $validator->validate($client['pem'])->reason);
+    }
+
 }

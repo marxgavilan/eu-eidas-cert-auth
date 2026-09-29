@@ -4,8 +4,6 @@ Framework-free PHP 8.2+ library for certificate-based client authentication agai
 
 [Español](README.es.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
-This repository is private pending review. The package does not include any real private keys, certificates, platform endpoints, or customer data.
-
 ## Requirements and installation
 
 PHP 8.2+ with `curl`, `dom`, `libxml`, and `openssl`; the `openssl` executable is needed for RSA-PSS, OCSP and CRL verification. Install with `composer require iberfacil/eidas-cert-auth` when published. For this checkout, run `composer install`.
@@ -14,7 +12,7 @@ PHP 8.2+ with `curl`, `dom`, `libxml`, and `openssl`; the `openssl` executable i
 
 ## Trust-list import
 
-The default source is the [European LOTL](https://ec.europa.eu/tools/lotl/eu-lotl.xml). The default accepted country is the configured region (`ES`); other countries must be explicitly listed. Only configured `CA/QC` service types with a `granted` status at the evaluation date contribute CA certificates. Service history is used when evaluating an earlier date. Each certificate becomes `<sha256>.pem`; `bundle.pem` concatenates the current set. `manifest.json` records country and service type.
+The default source is the [European LOTL](https://ec.europa.eu/tools/lotl/eu-lotl.xml). The default accepted country is the configured region (`ES`); other countries must be explicitly listed. Only configured `CA/QC` service types with a `granted` status, the `ForeSignatures` indication and no `NotQualified` or `QCForLegalPerson` qualifier contribute CA certificates by default. Service history is used when evaluating an earlier date. Each certificate becomes `<sha256>.pem`; `bundle.pem` concatenates the current set. `manifest.json` records country, service type, publication time, list expiry and per-country sequence numbers.
 
 The LOTL signer must match a pinned SHA-256 fingerprint from [Official Journal C/2026/1944, 15 April 2026](https://eur-lex.europa.eu/eli/C/2026/1944/oj/eng). The six published fingerprints are defaults in `Options::OJ_FINGERPRINTS` and `config/eidas-cert-auth.php`. Review that notice and the [pivot mechanism](https://ec.europa.eu/tools/lotl/pivot-lotl-explanation.html) before changing pins; the package does not automatically follow pivot LOTLs. Each national TSL signer must match a certificate in the signed LOTL pointer for that country. A standalone TSL requires caller-supplied signer pins.
 
@@ -25,7 +23,7 @@ vendor/bin/eidas-cert-auth trust-list:update --store=/path/to/private-data/trust
 vendor/bin/eidas-cert-auth doctor --store=/path/to/private-data/trust
 ```
 
-The live path is an atomic symlink to a generation directory beside it. Its parent must exist and be writable; the live path must be absent or already be a symlink. Use `--dry-run` to verify signatures and print additions/removals without changing it; a count-guard failure is reported after the diff. An update with fewer than 80% of the previous CA count is rejected unless `--force` is given. `--force` affects only the count guard; invalid signatures and empty imports always fail. Old generations remain available for rollback and should be pruned under your retention policy.
+The live path is an atomic symlink to a generation directory beside it. Its parent must exist and be writable; the live path must be absent or already be a symlink. Use `--dry-run` to verify signatures and print additions/removals without changing it; a count-guard failure is reported after the diff. An update with fewer than 80% of the previous CA count in any country is rejected unless `--force` is given. `--force` affects only the count guard; invalid signatures and empty imports always fail. Old generations remain available for rollback and should be pruned under your retention policy. The generation directory is mode 0700: run updates as the same user as the validator, or grant that user access through deployment permissions. The validator rejects a store after its earliest list NextUpdate or seven days without a successful update by default; configure the maximum age to match your update schedule. Stores created by earlier versions need one successful update to gain expiry and sequence metadata before validation can use them.
 
 Framework-free use:
 
@@ -47,7 +45,7 @@ For a standalone TSL, obtain signer fingerprints from a separately verified LOTL
 
 `CertificateValidator::validate()` returns a typed `ValidationResult` with `valid`, `reason`, `identity`, `certificate`, and `revocationSource`. It checks parsing, validity dates, every chain signature to a CA in the current store, CA constraints, digital-signature key usage, client-auth EKU, the ETSI QcCompliance statement by default, accepted country, a personal identifier, and revocation. OCSP is tried first; CRL is a verified fallback. Responses are verified by OpenSSL against the issuer, have timeouts, and are cached by SHA-256 certificate fingerprint. Unavailable revocation fails closed by default; `softFailRevocation` is an explicit policy choice.
 
-Identity extraction exposes given name, surnames, identifier, country, person type (`natural`, `representative`, `legal`), organization, organization identifier, representation, and identifier scheme. There are extractors for ES, PT, IT, FR, and DE, plus a generic ETSI EN 319 412-1 extractor for `IDC`, `PAS`, `TIN`, and `VAT` semantics. The Spanish extractor also handles `IDCES-`, `VATES-`, and a representative ID in a common name. These fields are claims in the certificate; applications must decide how to bind them to accounts.
+Identity extraction exposes given name, surnames, identifier, country, person type (`natural`, `representative`, `legal`), organization, organization identifier, representation, and identifier scheme. There are extractors for ES, PT, IT, FR, and DE, plus a generic ETSI EN 319 412-1 extractor for `IDC`, `PAS`, `TIN`, and `VAT` semantics. The Spanish extractor also handles `IDCES-`, `VATES-`, and a representative ID in a common name. These fields are claims in the certificate; applications must bind accounts by `(scheme, country, value)` and verify the intended person type, rather than matching `value` alone.
 
 ```php
 use Iberfacil\EidasCertAuth\Cache\InMemoryRevocationCache;
@@ -65,7 +63,7 @@ if (! $result->valid) {
 }
 ```
 
-Revocation URLs in client certificates can use HTTP. Transport forbids redirects, rejects private or reserved DNS answers, and pins the resolved public address for the request; deploy egress filtering as well. For a process-wide cache or intermediate certificates, inject your own `RevocationCache` or the validator's `intermediates` argument.
+Revocation URLs in client certificates can use HTTP. Transport forbids redirects, rejects private or reserved DNS answers, and pins the resolved public address for the request; deploy egress filtering as well. For a process-wide cache or intermediate certificates, inject your own `RevocationCache` or the validator's `intermediates` argument. OCSP good responses require a recent thisUpdate and nextUpdate.
 
 ## TLS termination: `optional_no_ca`
 
@@ -102,7 +100,7 @@ SSLOptions +StdEnvVars +ExportCertData
 
 ## Laravel
 
-The provider auto-registers when Laravel is installed. Publish configuration with `php artisan vendor:publish --tag=eidas-cert-auth-config`. Set `EIDAS_STORE_PATH`, `EIDAS_REGION`, and optionally `EIDAS_COUNTRIES` (comma separated). In the published config, set `service_types`, `minimum_retention_percent`, signer pins, `require_qualified`, `soft_fail_revocation`, and an optional `revocation_cache_store` to your policy. Laravel uses its cache for revocation results. Set `schedule_weekly` to `true` to register `eidas:trust-list:update` weekly with Laravel's scheduler; the application still needs its normal scheduler trigger.
+The provider auto-registers when Laravel is installed. Publish configuration with `php artisan vendor:publish --tag=eidas-cert-auth-config`. Set `EIDAS_STORE_PATH`, `EIDAS_REGION`, and optionally `EIDAS_COUNTRIES` (comma separated). In the published config, set `service_types`, `minimum_retention_percent`, signer pins, `require_qualified`, `soft_fail_revocation`, and an optional `revocation_cache_store`, `intermediates` and `maximum_store_age_seconds` to your policy. Laravel uses its cache for revocation results. Set `schedule_weekly` to `true` to register `eidas:trust-list:update` weekly with Laravel's scheduler; the application still needs its normal scheduler trigger.
 
 ```bash
 php artisan eidas:trust-list:update --dry-run

@@ -4,15 +4,13 @@ Paquete PHP 8.2+ para autenticar clientes mediante certificados y listas de conf
 
 [English](README.md) · [Seguridad](SECURITY.md) · [Cambios](CHANGELOG.md)
 
-Este repositorio permanece privado hasta su revisión. No contiene claves privadas, certificados reales, datos de clientes ni direcciones de la plataforma.
-
 ## Instalación y listas de confianza
 
 Requiere PHP 8.2+, extensiones `curl`, `dom`, `libxml`, `openssl` y el ejecutable `openssl` para RSA-PSS y OCSP/CRL. En este checkout: `composer install`. Una vez publicado: `composer require iberfacil/eidas-cert-auth`.
 
 La fuente por defecto es la [LOTL europea](https://ec.europa.eu/tools/lotl/eu-lotl.xml). Se comprueba su firma XMLDSig con las seis huellas SHA-256 del [Diario Oficial C/2026/1944, de 15 de abril de 2026](https://eur-lex.europa.eu/eli/C/2026/1944/oj/eng), configuradas en `Options::OJ_FINGERPRINTS`. Después se sigue únicamente cada puntero XML a una TSL de un país aceptado y se verifica que la firma usa un certificado anunciado en la LOTL. Los cambios futuros de certificados de la LOTL requieren revisar el [mecanismo de pivote](https://ec.europa.eu/tools/lotl/pivot-lotl-explanation.html) y actualizar las huellas de forma controlada: el paquete no sigue pivotes automáticamente.
 
-Por defecto solo se acepta el país de `region` (`ES`); configure `countries` para ampliar la selección. Se importan los certificados CA de servicios `CA/QC` cuyo estado es `granted` en la fecha evaluada, considerando el historial de estados. Se crea un PEM por huella, `bundle.pem` y `manifest.json`.
+Por defecto solo se acepta el país de `region` (`ES`); configure `countries` para ampliar la selección. Se importan por defecto certificados CA de servicios `CA/QC` con estado `granted`, indicación `ForeSignatures` y sin calificadores `NotQualified` ni `QCForLegalPerson`, considerando el historial de estados. Se crea un PEM por huella, `bundle.pem` y `manifest.json`.
 
 ```bash
 mkdir -p /path/to/private-data
@@ -21,7 +19,7 @@ vendor/bin/eidas-cert-auth trust-list:update --store=/path/to/private-data/trust
 vendor/bin/eidas-cert-auth doctor --store=/path/to/private-data/trust
 ```
 
-La ruta activa es un enlace simbólico que se sustituye atómicamente por una nueva generación; su carpeta padre debe existir y ser escribible. Se rechaza una lista con menos del 80 % de CAs anteriores, salvo `--force`. Esta opción **solo** omite ese umbral; no acepta firmas erróneas ni listas vacías. `--dry-run` verifica y muestra altas y bajas sin modificar el almacén, aunque el umbral vaya a rechazar el cambio. Se conservan generaciones antiguas para poder revertir; establezca una política de limpieza.
+La ruta activa es un enlace simbólico que se sustituye atómicamente por una nueva generación; su carpeta padre debe existir y ser escribible. Se rechaza una lista con menos del 80 % de CAs anteriores en cualquier país, salvo `--force`. Esta opción **solo** omite ese umbral; no acepta firmas erróneas ni listas vacías. `--dry-run` verifica y muestra altas y bajas sin modificar el almacén, aunque el umbral vaya a rechazar el cambio. Se conservan generaciones antiguas para poder revertir; establezca una política de limpieza. La generación se crea con modo 0700: actualice con el mismo usuario que valida, o conceda acceso mediante permisos de despliegue. El validador rechaza un almacén vencido por NextUpdate o sin actualizar durante siete días por defecto. Los almacenes de versiones anteriores necesitan una actualización correcta para incorporar metadatos de caducidad y secuencia antes de volver a validar.
 
 La TSL suelta se importa con `TrustListImporter::importTsl($xml, 'ES', $huellasFirmantes)`. Obtenga esas huellas de una LOTL previamente verificada o de otra publicación de confianza, nunca del propio XML sin verificar. `robrichards/xmlseclibs` (versión 3.1.5 o superior de esa rama) realiza las operaciones XMLDSig; el paquete comprueba además las referencias, algoritmos, transformaciones, raíz firmada y huellas permitidas. Las firmas RSA-PSS, presentes en la TSL alemana actual, se comprueban con OpenSSL. Se verifican también las referencias XAdES presentes en la LOTL actual.
 
@@ -29,7 +27,7 @@ La TSL suelta se importa con `TrustListImporter::importTsl($xml, 'ES', $huellasF
 
 `CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate` y `revocationSource`. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, keyUsage de firma digital, EKU de autenticación cliente, declaración ETSI QcCompliance (por defecto), país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
 
-Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-` y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador decide cómo vincularlos a sus usuarios.
+Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-` y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador debe vincular usuarios por `(scheme, country, value)` y comprobar el tipo de persona, no solo el valor.
 
 ```php
 use Iberfacil\EidasCertAuth\Options;
@@ -79,7 +77,7 @@ Con PHP-FPM hay que configurar y comprobar la transferencia explícita de la var
 
 ## Laravel
 
-El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluido `revocation_cache_store`. Laravel usa su caché para los resultados de revocación. `schedule_weekly=true` programa el comando semanalmente; la aplicación necesita activar su disparador habitual del scheduler.
+El proveedor se descubre automáticamente. Publique la configuración con `php artisan vendor:publish --tag=eidas-cert-auth-config`. Variables habituales: `EIDAS_STORE_PATH`, `EIDAS_REGION`, `EIDAS_COUNTRIES` (separados por comas). La configuración permite tipos de servicio, huellas de firmantes, umbral de sustitución y política de revocación, incluidos `revocation_cache_store`, `intermediates` y `maximum_store_age_seconds`. Laravel usa su caché para los resultados de revocación. `schedule_weekly=true` programa el comando semanalmente; la aplicación necesita activar su disparador habitual del scheduler.
 
 ```bash
 php artisan eidas:trust-list:update --dry-run

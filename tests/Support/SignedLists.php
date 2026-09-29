@@ -82,7 +82,7 @@ final class SignedLists
         $cert = base64_encode(TestPki::der($tslSignerPem));
 
         return <<<XML
-            <TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><SchemeTerritory>EU</SchemeTerritory><NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate><PointersToOtherTSL><OtherTSLPointer><TSLLocation>{$url}</TSLLocation><ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId><X509Certificate>{$cert}</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities><AdditionalInformation><OtherInformation><SchemeTerritory>{$country}</SchemeTerritory></OtherInformation></AdditionalInformation></OtherTSLPointer></PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>
+            <TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><SchemeTerritory>EU</SchemeTerritory><TSLSequenceNumber>1</TSLSequenceNumber><ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime><NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate><PointersToOtherTSL><OtherTSLPointer><TSLLocation>{$url}</TSLLocation><ServiceDigitalIdentities><ServiceDigitalIdentity><DigitalId><X509Certificate>{$cert}</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceDigitalIdentities><AdditionalInformation><OtherInformation><SchemeTerritory>{$country}</SchemeTerritory></OtherInformation></AdditionalInformation></OtherTSLPointer></PointersToOtherTSL></SchemeInformation></TrustServiceStatusList>
             XML;
     }
 
@@ -93,9 +93,9 @@ final class SignedLists
         foreach ($cas as $pem) {
             $der = base64_encode(TestPki::der($pem));
             $past = $history ? '<ServiceHistory><ServiceHistoryInstance><ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted</ServiceStatus><StatusStartingTime>2020-01-01T00:00:00Z</StatusStartingTime></ServiceHistoryInstance></ServiceHistory>' : '';
-            $services .= '<TSPService><ServiceInformation><ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier><ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/' . $status . '</ServiceStatus><StatusStartingTime>2025-01-01T00:00:00Z</StatusStartingTime><ServiceDigitalIdentity><DigitalId><X509Certificate>' . $der . '</X509Certificate></DigitalId></ServiceDigitalIdentity></ServiceInformation>' . $past . '</TSPService>';
+            $services .= '<TSPService><ServiceInformation><ServiceTypeIdentifier>http://uri.etsi.org/TrstSvc/Svctype/CA/QC</ServiceTypeIdentifier><ServiceStatus>http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/' . $status . '</ServiceStatus><StatusStartingTime>2025-01-01T00:00:00Z</StatusStartingTime><ServiceDigitalIdentity><DigitalId><X509Certificate>' . $der . '</X509Certificate></DigitalId></ServiceDigitalIdentity><ServiceInformationExtensions><Extension><AdditionalServiceInformation><URI>http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures</URI></AdditionalServiceInformation></Extension></ServiceInformationExtensions></ServiceInformation>' . $past . '</TSPService>';
         }
 
-        return '<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><SchemeTerritory>' . $country . '</SchemeTerritory><NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation><TrustServiceProviderList><TrustServiceProvider><TSPServices>' . $services . '</TSPServices></TrustServiceProvider></TrustServiceProviderList></TrustServiceStatusList>';
+        return '<TrustServiceStatusList xmlns="http://uri.etsi.org/02231/v2#"><SchemeInformation><SchemeTerritory>' . $country . '</SchemeTerritory><TSLSequenceNumber>1</TSLSequenceNumber><ListIssueDateTime>2026-01-01T00:00:00Z</ListIssueDateTime><NextUpdate><dateTime>2099-01-01T00:00:00Z</dateTime></NextUpdate></SchemeInformation><TrustServiceProviderList><TrustServiceProvider><TSPServices>' . $services . '</TSPServices></TrustServiceProvider></TrustServiceProviderList></TrustServiceStatusList>';
     }
 }
