@@ -1,6 +1,6 @@
 {
     "name": "iberfacil/eidas-cert-auth",
-    "description": "Framework-free eIDAS certificate authentication and signed trusted-list import with an optional Laravel adapter.",
+    "description": "Autentica en PHP con certificados eIDAS (FNMT, DNIe y UE), listas de confianza firmadas y revocación. CLI y Laravel.",
     "type": "library",
     "license": "MIT",
     "homepage": "https://github.com/marxgavilan/eidas-cert-auth",
