@@ -52,7 +52,7 @@ final class TrustStore
         return $result;
     }
 
-    /** @return array<string, array{country: string, service: string}> */
+    /** @return array<string, array{country: string, service: string, not_qualified_criteria?: list<string>}> */
     public function manifest(): array
     {
         $generation = realpath($this->path);
@@ -64,7 +64,7 @@ final class TrustStore
     }
 
     /**
-     * @param array<string, array{pem: string, country: string, service: string}> $certificates
+     * @param array<string, array{pem: string, country: string, service: string, not_qualified_criteria?: list<string>}> $certificates
      * @param array<string, int> $sequences
      * @param array<string, string> $issueDates
      */
@@ -88,7 +88,7 @@ final class TrustStore
     }
 
     /**
-     * @param array<string, array{pem: string, country: string, service: string}> $certificates
+     * @param array<string, array{pem: string, country: string, service: string, not_qualified_criteria?: list<string>}> $certificates
      * @param array<string, int> $sequences
      * @param array<string, string> $issueDates
      */
@@ -163,7 +163,7 @@ final class TrustStore
                 }
                 $this->write($generation . '/' . $fingerprint . '.pem', $entry['pem']);
                 $bundle .= $entry['pem'];
-                $entries[$fingerprint] = ['country' => $entry['country'], 'service' => $entry['service']];
+                $entries[$fingerprint] = ['country' => $entry['country'], 'service' => $entry['service'], 'not_qualified_criteria' => $entry['not_qualified_criteria'] ?? []];
             }
             $this->write($generation . '/bundle.pem', $bundle);
             $manifest = ['generated_at' => gmdate('c'), 'next_update' => ($nextUpdate ?? new DateTimeImmutable('+30 days'))->format(DATE_ATOM), 'sequences' => $mergedSequences, 'issue_dates' => $mergedIssueDates, 'certificates' => $entries];
@@ -185,7 +185,7 @@ final class TrustStore
         return new ImportResult(count($new), $added, $removed, false);
     }
 
-    /** @return array{generated_at?: string, next_update?: string, sequences: array<string, int>, issue_dates?: array<string, string>, certificates: array<string, array{country: string, service: string}>} */
+    /** @return array{generated_at?: string, next_update?: string, sequences: array<string, int>, issue_dates?: array<string, string>, certificates: array<string, array{country: string, service: string, not_qualified_criteria?: list<string>}>} */
     private function readManifest(string $generation): array
     {
         $json = @file_get_contents($generation . '/manifest.json');
@@ -212,7 +212,7 @@ final class TrustStore
             }
         }
         foreach ($data['certificates'] as $fingerprint => $entry) {
-            if (! is_string($fingerprint) || ! preg_match('/^[0-9a-f]{64}$/', $fingerprint) || ! is_array($entry) || ! is_string($entry['country'] ?? null) || ! is_string($entry['service'] ?? null)) {
+            if (! is_string($fingerprint) || ! preg_match('/^[0-9a-f]{64}$/', $fingerprint) || ! is_array($entry) || ! is_string($entry['country'] ?? null) || ! is_string($entry['service'] ?? null) || ! is_array($entry['not_qualified_criteria'] ?? []) || count(array_filter($entry['not_qualified_criteria'] ?? [], 'is_string')) !== count($entry['not_qualified_criteria'] ?? [])) {
                 throw new TrustListRejected('The trusted-store manifest is invalid.');
             }
         }

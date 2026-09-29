@@ -163,6 +163,7 @@ final class SecurityRegressionTest extends TestCase
         $pki = new TestPki();
         $signer = $pki->issue(['CN' => 'Signer']);
         $ca = $pki->issue(['CN' => 'CA'], profile: 'ca');
+        $client = $pki->issue(['CN' => 'Citizen', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'], $ca, 'client');
         $store = new TrustStore($this->dir . '/trust');
         $importer = new TrustListImporter(new FakeTransport(), new XmlSignatureVerifier(), $store, new Options(requireForeSignatures: true));
         $base = SignedLists::tsl('ES', [$ca['pem']]);
@@ -171,7 +172,13 @@ final class SecurityRegressionTest extends TestCase
             $xml = str_replace('</ServiceInformationExtensions>', $qualifications . '</ServiceInformationExtensions>', $base);
             self::assertSame(1, $importer->importTsl(SignedLists::sign($xml, $signer), 'ES', [self::fingerprint($signer['pem'])])->count, $qualifier);
             self::assertArrayHasKey(self::fingerprint($ca['pem']), $store->certificates(), $qualifier);
+            $transport = (new FakeTransport())->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $ca));
+            $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options());
+            self::assertTrue($validator->validate($client['pem'])->valid, $qualifier);
         }
+        $matching = str_replace(['QCForLegalPerson', 'name="keyEncipherment"'], ['NotQualified', 'name="digitalSignature"'], $xml);
+        $importer->importTsl(SignedLists::sign($matching, $signer), 'ES', [self::fingerprint($signer['pem'])]);
+        self::assertSame('not_qualified', $validator->validate($client['pem'])->reason);
     }
 
     public function testStandaloneTslKeepsLotlSequenceAndIssueDate(): void

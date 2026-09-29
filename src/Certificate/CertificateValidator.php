@@ -49,7 +49,9 @@ final readonly class CertificateValidator
         if ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature') || $parsed->extendedKeyUsage === null || (! str_contains($parsed->extendedKeyUsage, 'TLS Web Client Authentication') && ! str_contains($parsed->extendedKeyUsage, 'clientAuth'))) {
             return ValidationResult::reject('not_for_authentication', $parsed);
         }
-        if ($this->options->requireQualified && ! $parsed->qualified) {
+        $anchorMetadata = $this->store->manifest()[$issuer['anchor']] ?? [];
+        $qualificationRules = $anchorMetadata['not_qualified_criteria'] ?? [];
+        if ($this->options->requireQualified && (! $parsed->qualified || QualificationCriteria::excludes($parsed->pem, $qualificationRules))) {
             return ValidationResult::reject('not_qualified', $parsed);
         }
         $subjectCountry = strtoupper((string) ($parsed->subject['C'] ?? ''));
@@ -68,7 +70,7 @@ final readonly class CertificateValidator
         if (! isset($identity) || $identity->identifier === null || $identity->personType === 'legal') {
             return ValidationResult::reject('no_personal_identity', $parsed);
         }
-        $revocation = $this->revocation->check($parsed, $issuer);
+        $revocation = $this->revocation->check($parsed, $issuer['pem']);
         if ($revocation['status'] === 'revoked') {
             return ValidationResult::reject('revoked', $parsed);
         }
@@ -79,16 +81,17 @@ final readonly class CertificateValidator
         return new ValidationResult(true, null, $identity, $parsed, $revocation['source']);
     }
 
-    private function issuer(ParsedCertificate $certificate, DateTimeImmutable $at): ?string
+    /** @return array{pem: string, anchor: string}|null */
+    private function issuer(ParsedCertificate $certificate, DateTimeImmutable $at): ?array
     {
         $anchors = $this->store->certificates();
         $pool = $this->intermediates;
         $current = $certificate->pem;
         $direct = null;
         for ($depth = 0; $depth < 5; $depth++) {
-            foreach ($anchors as $anchor) {
+            foreach ($anchors as $fingerprint => $anchor) {
                 if (self::signedBy($current, $anchor, $at, $depth)) {
-                    return $direct ?? $anchor;
+                    return ['pem' => $direct ?? $anchor, 'anchor' => $fingerprint];
                 }
             }
             $next = null;

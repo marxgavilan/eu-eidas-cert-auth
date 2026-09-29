@@ -89,7 +89,7 @@ final readonly class TrustListImporter
         return $this->store->publish($this->extract($document, $country, $at), $force, $dryRun, [$country => $this->sequence($document)], $next, [$country => $this->issueDate($document)]);
     }
 
-    /** @return array<string, array{pem: string, country: string, service: string}> */
+    /** @return array<string, array{pem: string, country: string, service: string, not_qualified_criteria: list<string>}> */
     private function extract(DOMDocument $document, string $country, DateTimeImmutable $at): array
     {
         $xpath = self::xpath($document);
@@ -120,11 +120,37 @@ final readonly class TrustListImporter
                 if (! is_array($details) || ! str_contains((string) ($details['extensions']['basicConstraints'] ?? ''), 'CA:TRUE')) {
                     continue;
                 }
-                $result[hash('sha256', $der)] = ['pem' => $pem, 'country' => $country, 'service' => $type];
+                $result[hash('sha256', $der)] = ['pem' => $pem, 'country' => $country, 'service' => $type, 'not_qualified_criteria' => $this->notQualifiedCriteria($xpath, $info)];
             }
         }
 
         return $result;
+    }
+
+    /** @return list<string> */
+    private function notQualifiedCriteria(DOMXPath $xpath, DOMElement $info): array
+    {
+        $rules = [];
+        foreach ($xpath->query('./tsl:ServiceInformationExtensions/tsl:Extension/sie:Qualifications/sie:QualificationElement', $info) ?: [] as $element) {
+            if (! $element instanceof DOMElement) {
+                continue;
+            }
+            $excluded = false;
+            foreach ($xpath->query('./sie:Qualifiers/sie:Qualifier', $element) ?: [] as $qualifier) {
+                if ($qualifier instanceof DOMElement && in_array($qualifier->getAttribute('uri'), ['http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/NotQualified', 'http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCForLegalPerson'], true)) {
+                    $excluded = true;
+                }
+            }
+            if (! $excluded) {
+                continue;
+            }
+            $criteriaNodes = $xpath->query('./sie:CriteriaList', $element);
+            $criteria = $criteriaNodes === false ? null : $criteriaNodes->item(0);
+            $xml = $criteria instanceof DOMElement ? $criteria->ownerDocument?->saveXML($criteria) : null;
+            $rules[] = '<root xmlns:sie="' . self::SIE . '">' . ($xml ?: '') . '</root>';
+        }
+
+        return $rules;
     }
 
     private function hasForeSignatures(DOMXPath $xpath, DOMElement $info): bool
