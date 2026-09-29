@@ -15,7 +15,7 @@ final class TrustStore
 
     private ?string $cachedGeneration = null;
 
-    public function __construct(public readonly string $path, private readonly int $minimumRetentionPercent = 80, private readonly int $maximumAgeSeconds = 604800) {}
+    public function __construct(public readonly string $path, private readonly int $minimumRetentionPercent = 80, private readonly int $maximumAgeSeconds = 2592000) {}
 
     /** @return array<string, string>
      *  @phpstan-impure
@@ -94,10 +94,28 @@ final class TrustStore
      */
     private function publishLocked(array $certificates, bool $force, bool $dryRun, array $sequences, ?DateTimeImmutable $nextUpdate, array $issueDates): ImportResult
     {
-        $oldData = is_link($this->path) ? $this->readManifest((string) realpath($this->path)) : ['certificates' => [], 'sequences' => [], 'issue_dates' => []];
+        if (is_link($this->path)) {
+            $oldGeneration = realpath($this->path);
+            if ($oldGeneration === false) {
+                throw new TrustListRejected('The trusted-store symlink target is missing.');
+            }
+            $oldData = $this->readManifest($oldGeneration);
+        } else {
+            $oldData = ['certificates' => [], 'sequences' => [], 'issue_dates' => []];
+        }
         foreach ($sequences as $country => $number) {
             if (isset($oldData['sequences'][$country]) && ($number < $oldData['sequences'][$country] || ($number === $oldData['sequences'][$country] && isset($issueDates[$country], $oldData['issue_dates'][$country]) && strtotime($issueDates[$country]) < strtotime($oldData['issue_dates'][$country])))) {
                 throw new TrustListRejected('Trusted-list sequence rollback rejected.');
+            }
+        }
+        $mergedSequences = $oldData['sequences'];
+        foreach ($sequences as $country => $number) {
+            $mergedSequences[$country] = max($mergedSequences[$country] ?? 0, $number);
+        }
+        $mergedIssueDates = $oldData['issue_dates'] ?? [];
+        foreach ($issueDates as $country => $date) {
+            if (! isset($mergedIssueDates[$country]) || strtotime($date) > strtotime($mergedIssueDates[$country])) {
+                $mergedIssueDates[$country] = $date;
             }
         }
         $old = array_keys($oldData['certificates']);
@@ -148,7 +166,7 @@ final class TrustStore
                 $entries[$fingerprint] = ['country' => $entry['country'], 'service' => $entry['service']];
             }
             $this->write($generation . '/bundle.pem', $bundle);
-            $manifest = ['generated_at' => gmdate('c'), 'next_update' => ($nextUpdate ?? new DateTimeImmutable('+7 days'))->format(DATE_ATOM), 'sequences' => $sequences, 'issue_dates' => $issueDates, 'certificates' => $entries];
+            $manifest = ['generated_at' => gmdate('c'), 'next_update' => ($nextUpdate ?? new DateTimeImmutable('+30 days'))->format(DATE_ATOM), 'sequences' => $mergedSequences, 'issue_dates' => $mergedIssueDates, 'certificates' => $entries];
             $this->write($generation . '/manifest.json', (string) json_encode($manifest, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
             $link = $parent . '/.' . $name . '.next.' . bin2hex(random_bytes(6));
             if (! symlink(basename($generation), $link) || ! rename($link, $this->path)) {

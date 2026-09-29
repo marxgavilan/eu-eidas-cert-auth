@@ -124,7 +124,7 @@ final class SecurityRegressionTest extends TestCase
         self::assertSame(3, $rejected);
     }
 
-    public function testMissingNextUpdateRollbackAndQualifiersFailClosed(): void
+    public function testMissingNextUpdateAndRollbackFailClosed(): void
     {
         $pki = new TestPki();
         $signer = $pki->issue(['CN' => 'Signer']);
@@ -148,8 +148,6 @@ final class SecurityRegressionTest extends TestCase
             $base,
             preg_replace('#<NextUpdate>.*?</NextUpdate>#', '', $higher),
             str_replace('ForeSignatures', 'ForeSeals', $higher),
-            str_replace('</ServiceInformationExtensions>', '<Extension><sie:Qualifications xmlns:sie="http://uri.etsi.org/TrstSvc/SvcInfoExt/eSigDir-1999-93-EC-TrustedList/#"><sie:QualificationElement><sie:Qualifiers><sie:Qualifier uri="http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/NotQualified"/></sie:Qualifiers></sie:QualificationElement></sie:Qualifications></Extension></ServiceInformationExtensions>', $higher),
-            str_replace('</ServiceInformationExtensions>', '<Extension><sie:Qualifications xmlns:sie="http://uri.etsi.org/TrstSvc/SvcInfoExt/eSigDir-1999-93-EC-TrustedList/#"><sie:QualificationElement><sie:Qualifiers><sie:Qualifier uri="http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCForLegalPerson"/></sie:Qualifiers></sie:QualificationElement></sie:Qualifications></Extension></ServiceInformationExtensions>', $higher),
         ] as $candidate) {
             try {
                 $importer->importTsl(SignedLists::sign((string) $candidate, $signer), 'ES', $pins);
@@ -158,6 +156,70 @@ final class SecurityRegressionTest extends TestCase
                 self::assertCount(1, $store->certificates());
             }
         }
+    }
+
+    public function testCertificateQualifiersDoNotExcludeTheirCaService(): void
+    {
+        $pki = new TestPki();
+        $signer = $pki->issue(['CN' => 'Signer']);
+        $ca = $pki->issue(['CN' => 'CA'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $importer = new TrustListImporter(new FakeTransport(), new XmlSignatureVerifier(), $store, new Options(requireForeSignatures: true));
+        $base = SignedLists::tsl('ES', [$ca['pem']]);
+        foreach (['NotQualified', 'QCForLegalPerson'] as $qualifier) {
+            $qualifications = '<Extension><sie:Qualifications xmlns:sie="http://uri.etsi.org/TrstSvc/SvcInfoExt/eSigDir-1999-93-EC-TrustedList/#"><sie:QualificationElement><sie:Qualifiers><sie:Qualifier uri="http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/' . $qualifier . '"/></sie:Qualifiers><sie:CriteriaList assert="all"><sie:KeyUsage><sie:KeyUsageBit name="keyEncipherment">true</sie:KeyUsageBit></sie:KeyUsage></sie:CriteriaList></sie:QualificationElement></sie:Qualifications></Extension>';
+            $xml = str_replace('</ServiceInformationExtensions>', $qualifications . '</ServiceInformationExtensions>', $base);
+            self::assertSame(1, $importer->importTsl(SignedLists::sign($xml, $signer), 'ES', [self::fingerprint($signer['pem'])])->count, $qualifier);
+            self::assertArrayHasKey(self::fingerprint($ca['pem']), $store->certificates(), $qualifier);
+        }
+    }
+
+    public function testStandaloneTslKeepsLotlSequenceAndIssueDate(): void
+    {
+        $pki = new TestPki();
+        $lotlSigner = $pki->issue(['CN' => 'LOTL signer']);
+        $tslSigner = $pki->issue(['CN' => 'TSL signer']);
+        $ca = $pki->issue(['CN' => 'CA'], profile: 'ca');
+        $url = 'https://lists.example.test/es.xml';
+        $store = new TrustStore($this->dir . '/trust');
+        $options = new Options(lotlSignerFingerprints: [self::fingerprint($lotlSigner['pem'])]);
+        $tsl = SignedLists::sign(str_replace('<TSLSequenceNumber>1</TSLSequenceNumber>', '<TSLSequenceNumber>10</TSLSequenceNumber>', SignedLists::tsl('ES', [$ca['pem']])), $tslSigner);
+        $importer = new TrustListImporter((new FakeTransport())->respond($url, $tsl), new XmlSignatureVerifier(), $store, $options);
+        $lotl = SignedLists::sign(str_replace('<TSLSequenceNumber>1</TSLSequenceNumber>', '<TSLSequenceNumber>50</TSLSequenceNumber>', SignedLists::lotl('ES', $url, $tslSigner['pem'])), $lotlSigner);
+        $importer->importLotl($lotl);
+        $importer->importTsl($tsl, 'ES', [self::fingerprint($tslSigner['pem'])]);
+        $manifest = json_decode((string) file_get_contents($store->path . '/manifest.json'), true);
+        self::assertSame(['EU' => 50, 'ES' => 10], $manifest['sequences']);
+        self::assertSame(['EU', 'ES'], array_keys($manifest['issue_dates']));
+
+        $oldLotl = SignedLists::sign(str_replace('<TSLSequenceNumber>50</TSLSequenceNumber>', '<TSLSequenceNumber>1</TSLSequenceNumber>', str_replace('<TSLSequenceNumber>1</TSLSequenceNumber>', '<TSLSequenceNumber>50</TSLSequenceNumber>', SignedLists::lotl('ES', $url, $tslSigner['pem']))), $lotlSigner);
+        $this->expectException(TrustListRejected::class);
+        $importer->importLotl($oldLotl);
+    }
+
+    public function testRemovedCountryRetainsSequenceAndBrokenLinkIsRejected(): void
+    {
+        $pki = new TestPki();
+        $es = $pki->issue(['CN' => 'ES CA'], profile: 'ca');
+        $pt = $pki->issue(['CN' => 'PT CA'], profile: 'ca');
+        $esEntry = [self::fingerprint($es['pem']) => ['pem' => $es['pem'], 'country' => 'ES', 'service' => 'CA/QC']];
+        $ptEntry = [self::fingerprint($pt['pem']) => ['pem' => $pt['pem'], 'country' => 'PT', 'service' => 'CA/QC']];
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish($esEntry + $ptEntry, sequences: ['ES' => 10, 'PT' => 20], issueDates: ['ES' => '2026-01-01T00:00:00Z', 'PT' => '2026-01-01T00:00:00Z']);
+        $store->publish($esEntry, force: true, sequences: ['ES' => 11], issueDates: ['ES' => '2026-02-01T00:00:00Z']);
+        $manifest = json_decode((string) file_get_contents($store->path . '/manifest.json'), true);
+        self::assertSame(['ES' => 11, 'PT' => 20], $manifest['sequences']);
+        self::assertSame('2026-01-01T00:00:00Z', $manifest['issue_dates']['PT']);
+        try {
+            $store->publish($esEntry + $ptEntry, force: true, sequences: ['ES' => 11, 'PT' => 19]);
+            self::fail('A removed country accepted an older sequence.');
+        } catch (TrustListRejected) {
+            self::assertSame(['ES' => 11, 'PT' => 20], json_decode((string) file_get_contents($store->path . '/manifest.json'), true)['sequences']);
+        }
+        unlink($store->path);
+        symlink('missing-generation', $store->path);
+        $this->expectException(TrustListRejected::class);
+        $store->publish($esEntry);
     }
 
     public function testDoctypeOversizeAndSignatureStructuralChangesAreRejected(): void

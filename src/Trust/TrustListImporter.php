@@ -104,7 +104,7 @@ final readonly class TrustListImporter
                 continue;
             }
             $type = trim((string) $xpath->evaluate('string(./tsl:ServiceTypeIdentifier[1])', $info));
-            if (! in_array($type, $this->options->serviceTypes, true) || ! $this->isGranted($xpath, $service, $at) || ! $this->allowsSignatures($xpath, $info)) {
+            if (! in_array($type, $this->options->serviceTypes, true) || ! $this->isGranted($xpath, $service, $at) || ! $this->hasForeSignatures($xpath, $info)) {
                 continue;
             }
             foreach ($xpath->query('./tsl:ServiceDigitalIdentity/tsl:DigitalId/tsl:X509Certificate', $info) ?: [] as $node) {
@@ -127,19 +127,15 @@ final readonly class TrustListImporter
         return $result;
     }
 
-    private function allowsSignatures(DOMXPath $xpath, DOMElement $info): bool
+    private function hasForeSignatures(DOMXPath $xpath, DOMElement $info): bool
     {
         $uri = 'http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures';
         $fore = false;
-        foreach ($xpath->query('./tsl:ServiceInformationExtensions/tsl:Extension/tsl:AdditionalServiceInformation/tsl:URI | ./tsl:ServiceInformationExtensions/tsl:Extension/sie:Qualifications/sie:QualificationElement/sie:Qualifiers/sie:Qualifier', $info) ?: [] as $node) {
+        foreach ($xpath->query('./tsl:ServiceInformationExtensions/tsl:Extension/tsl:AdditionalServiceInformation/tsl:URI', $info) ?: [] as $node) {
             if (! $node instanceof DOMElement) {
                 continue;
             }
-            $value = $node->hasAttribute('uri') ? trim($node->getAttribute('uri')) : trim($node->textContent);
-            if (str_ends_with($value, '/NotQualified') || str_ends_with($value, '/QCForLegalPerson')) {
-                return false;
-            }
-            if ($value === $uri) {
+            if (trim($node->textContent) === $uri) {
                 $fore = true;
             }
         }
