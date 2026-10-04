@@ -27,7 +27,7 @@ Este paquete permite usar el certificado digital que la persona presenta al cone
 | **Caducado o aún no válido** (`expired`, `not_yet_valid`) | Está fuera de su periodo de vigencia. |
 | **Revocado** (`revoked`) | El emisor lo ha anulado: no debe dar acceso. |
 | **No se pudo comprobar la revocación** (`revocation_unavailable`) | No hay respuesta fiable de OCSP o CRL; se rechaza por defecto y conviene reintentar cuando vuelva el servicio. |
-| **Autoridad no admitida o certificado inadecuado** (`untrusted`, `no_authentication_usage`) | La cadena no llega a la lista aceptada, o el certificado no declara el uso requerido. |
+| **Autoridad no admitida o certificado inadecuado** (`untrusted`, `no_authentication_usage`, `no_signature_usage`) | La cadena no llega a la lista aceptada, o el certificado no declara el uso requerido. |
 | **No cumple las reglas de esta operación** (`country_not_accepted`, `qualified_required`, `dnie_disabled_for_profile`, `authentication_policy_mismatch`, `person_type_not_allowed`) | El perfil pide un país, tipo de persona, política o cualificación que este certificado no cumple. |
 | **No se puede identificar a la persona** (`no_personal_identity`, `malformed`) | Falta un identificador utilizable o el certificado no se puede leer. |
 
@@ -74,7 +74,7 @@ La TSL suelta se importa con `TrustListImporter::importTsl($xml, 'ES', $huellasF
 
 ## Validación e identidad
 
-`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate`, `revocationSource` y el `profile` solicitado. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, EKU `clientAuth` cuando existe o keyUsage `digitalSignature` si no hay EKU, requisitos del perfil, país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
+`CertificateValidator::validate()` devuelve `ValidationResult` con `valid`, `reason`, `identity`, `certificate`, `revocationSource` y el `profile` solicitado. Se comprueban cadena y firmas hasta el almacén, fechas, carácter de CA de los emisores, uso exigido por el perfil, cualificación, país, identificador personal y revocación. Se consulta OCSP primero y CRL si OCSP no sirve; OpenSSL verifica la respuesta o CRL contra el emisor. Hay tiempo límite y caché por huella SHA-256. La falta de respuesta de revocación rechaza por defecto; `softFailRevocation` es una decisión explícita del integrador.
 
 Los extractores ES, PT, IT, FR y DE, más uno genérico ETSI EN 319 412-1, devuelven nombre, apellidos, identificador, país, tipo de persona, organización y representación. Interpretan los prefijos `IDC`, `PAS`, `TIN` y `VAT`; el extractor español maneja además `IDCES-`, `VATES-`, un DNI/NIE sin prefijo en `serialNumber` con letra de control válida y el identificador de una persona representante en el nombre común. Los datos son declaraciones del certificado; el sistema integrador debe vincular usuarios por `(scheme, country, value)` y comprobar el tipo de persona, no solo el valor.
 
@@ -112,6 +112,8 @@ if (! $resultado->valid) {
 
 El perfil `default` acepta un certificado cuya cadena verificada llega a un ancla CA/QC aceptada de una TSL firmada con `ForeSignatures`, y declara uso de autenticación: EKU con `clientAuth`, o ausencia de EKU junto con keyUsage `digitalSignature`. No exige QcCompliance ni un OID de política concreto. Esta regla permite el login con certificados como el de autenticación del DNIe; la hoja debe superar también fechas, cadena, país, identidad y revocación.
 
+`usage` vale `authentication` por defecto en todos los perfiles, incluidos los ya configurados. Para validar certificados de firma, establezca `'usage' => 'signature'`: se exige keyUsage `nonRepudiation`/`contentCommitment` o `digitalSignature`. Si hay EKU, debe incluir `emailProtection`, `documentSigning` (`1.3.6.1.5.5.7.3.36`), `anyExtendedKeyUsage` o `clientAuth`. Un EKU `clientAuth` solo no sustituye al keyUsage de firma. El rechazo por uso de firma devuelve `no_signature_usage`. Cadena, confianza, cualificación, país, tipo de persona y revocación siguen comprobándose con las mismas reglas.
+
 **Riesgos:** El perfil por defecto acepta certificados no cualificados; la solidez de la comprobación de identidad depende de las prácticas de emisión de cada prestador. Si la TSL incluye una raíz como AC RAIZ DNIE 2, quedan cubiertas todas sus CA subordinadas, incluidas las que emiten certificados no cualificados. La recuperación AIA causa una petición saliente a una URL del certificado cliente antes de confiar en su cadena: limite la salida con `aia_allowed_hosts` y un cortafuegos. Para operaciones de alto riesgo, como firma, altas o poderes, utilice un perfil con `qualified_required` u OID explícitos de política de autenticación.
 
 La [DPC de la Policía, versión 3.2, apartados 7.1.4 y 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) documenta el OID `2.16.724.1.2.2.2.4`, `digitalSignature`, ausencia de EKU y DNI/NIE sin prefijo en `serialNumber`. El OID es una restricción **opcional** del perfil mediante `authentication_policies`; para ese OID se admite el sufijo documentado de dos componentes de versión. El interruptor `dnie` reconoce el DNIe por el sujeto del ancla TSL verificada que contiene `DNIE`, nunca por texto de la hoja.
@@ -131,7 +133,7 @@ Publique la configuración Laravel con `php artisan vendor:publish --tag=eidas-c
         'soft_fail_revocation' => false,
     ],
     'signature' => [
-        'countries' => ['ES'], 'qualified_required' => true,
+        'usage' => 'signature', 'countries' => ['ES'], 'qualified_required' => true,
         'person_types' => ['natural', 'representative'], 'dnie' => false,
         'soft_fail_revocation' => false,
     ],
@@ -143,7 +145,7 @@ Publique la configuración Laravel con `php artisan vendor:publish --tag=eidas-c
 ],
 ```
 
-Un perfil cualificado exige QcCompliance y aplica los criterios `NotQualified`/`QCForLegalPerson` de la TSL. `person_types` admite `natural`, `representative` y `legal` (sello de entidad con identificador de organización). También se exige uso de autenticación al sello. Para restringir políticas, añada al perfil `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; si se omite, no se exige OID. `soft_fail_revocation` vale `false` por defecto. Los campos omitidos heredan los valores globales; `default` existe sin configuración, acepta ES y DNIe y no exige cualificación. Un nombre inexistente lanza `InvalidArgumentException`. Los motivos de rechazo distinguen `no_authentication_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch` y `person_type_not_allowed`.
+Un perfil cualificado exige QcCompliance y aplica los criterios `NotQualified`/`QCForLegalPerson` de la TSL. `person_types` admite `natural`, `representative` y `legal` (sello de entidad con identificador de organización). También se exige al sello el uso configurado. Para restringir políticas, añada al perfil `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; si se omite, no se exige OID. `soft_fail_revocation` vale `false` por defecto. Los campos omitidos heredan los valores globales; `default` existe sin configuración, acepta ES y DNIe y no exige cualificación. Un nombre inexistente lanza `InvalidArgumentException`. Los motivos de rechazo distinguen `no_authentication_usage`, `no_signature_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch` y `person_type_not_allowed`.
 
 ```php
 // Ruta Laravel con el alias eidas.cert registrado por el proveedor:

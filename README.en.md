@@ -27,7 +27,7 @@ This package lets your application use the visitor's digital certificate:
 | **Expired or not yet valid** (`expired`, `not_yet_valid`) | The certificate is outside its validity dates. |
 | **Revoked** (`revoked`) | Its issuer has cancelled it; deny access. |
 | **Revocation unavailable** (`revocation_unavailable`) | Neither OCSP nor CRL provided a trustworthy answer; reject by default and retry when the service returns. |
-| **Untrusted or unsuitable** (`untrusted`, `no_authentication_usage`) | The chain does not reach an accepted authority, or the certificate lacks the required use. |
+| **Untrusted or unsuitable** (`untrusted`, `no_authentication_usage`, `no_signature_usage`) | The chain does not reach an accepted authority, or the certificate lacks the required use. |
 | **Profile rules not met** (`country_not_accepted`, `qualified_required`, `dnie_disabled_for_profile`, `authentication_policy_mismatch`, `person_type_not_allowed`) | This operation requires a country, person type, policy or qualification the certificate does not meet. |
 | **Identity unavailable** (`no_personal_identity`, `malformed`) | There is no usable identifier, or the certificate cannot be parsed. |
 
@@ -78,7 +78,7 @@ For a standalone TSL, obtain signer fingerprints from a separately verified LOTL
 
 ## Client validation and identity
 
-`CertificateValidator::validate()` returns a typed `ValidationResult` with `valid`, `reason`, `identity`, `certificate`, `revocationSource`, and the requested `profile`. It checks parsing, validity dates, every chain signature to a CA in the current store, CA constraints, client-auth EKU when present or digital-signature key usage when EKU is absent, profile qualification requirements, accepted country, a personal identifier, and revocation. OCSP is tried first; CRL is a verified fallback. Responses are verified by OpenSSL against the issuer, have timeouts, and are cached by SHA-256 certificate fingerprint. Unavailable revocation fails closed by default; `softFailRevocation` is an explicit policy choice.
+`CertificateValidator::validate()` returns a typed `ValidationResult` with `valid`, `reason`, `identity`, `certificate`, `revocationSource`, and the requested `profile`. It checks parsing, validity dates, every chain signature to a CA in the current store, CA constraints, the usage required by the profile, qualification requirements, accepted country, a personal identifier, and revocation. OCSP is tried first; CRL is a verified fallback. Responses are verified by OpenSSL against the issuer, have timeouts, and are cached by SHA-256 certificate fingerprint. Unavailable revocation fails closed by default; `softFailRevocation` is an explicit policy choice.
 
 Identity extraction exposes given name, surnames, identifier, country, person type (`natural`, `representative`, `legal`), organization, organization identifier, representation, and identifier scheme. There are extractors for ES, PT, IT, FR, and DE, plus a generic ETSI EN 319 412-1 extractor for `IDC`, `PAS`, `TIN`, and `VAT` semantics. The Spanish extractor also handles `IDCES-`, `VATES-`, a bare DNI/NIE in `serialNumber` with a valid check letter, and a representative ID in a common name. These fields are claims in the certificate; applications must bind accounts by `(scheme, country, value)` and verify the intended person type, rather than matching `value` alone.
 
@@ -104,6 +104,8 @@ Revocation and AIA issuer URLs in client certificates can use HTTP. Transport fo
 
 The default `default` profile accepts a client certificate whose verified chain reaches an accepted CA/QC TSL anchor with `ForeSignatures`, and declares authentication use: a present EKU contains `clientAuth`, or an absent EKU is paired with keyUsage `digitalSignature`. It does not require QcCompliance or a particular certificate-policy OID. This rule supports login with certificates such as DNIe authentication certificates; the leaf must still pass date, chain, country, identity and revocation checks. A profile can impose stricter requirements for a particular route.
 
+`usage` defaults to `authentication` for every profile, including existing ones. Set `'usage' => 'signature'` for signing certificates: keyUsage must include `nonRepudiation`/`contentCommitment` or `digitalSignature`. When EKU is present, it must include `emailProtection`, `documentSigning` (`1.3.6.1.5.5.7.3.36`), `anyExtendedKeyUsage`, or `clientAuth`. A `clientAuth` EKU alone cannot replace signing keyUsage. Rejection for missing signing use returns `no_signature_usage`. Chain, trust, qualification, country, person type, and revocation checks keep their existing rules.
+
 **Risk:** The default profile accepts non-qualified certificates, and the strength of identity verification depends on each provider's issuance practice. If the TSL lists a root such as AC RAIZ DNIE 2, every subordinate CA under that root is within the chain scope, including CAs issuing non-qualified certificates. AIA retrieval makes an outbound request to a URL supplied by the client certificate before its chain is trusted; restrict egress with `aia_allowed_hosts` and a firewall. For high-risk actions such as signing, registration or granting powers, use a profile with `qualified_required` or explicit authentication-policy OIDs.
 
 The [Spanish Police DNIe certification practice statement, version 3.2, sections 7.1.4 and 7.1.6](https://www.dnielectronico.es/PDFs/Politicas_de_certificacion_v3.2.pdf) documents the authentication OID `2.16.724.1.2.2.2.4`, `digitalSignature`, no EKU, and a bare DNI/NIE `serialNumber`. The OID is **optional**: set `authentication_policies` only when the application needs to restrict a profile to those OIDs. For that DNIe OID, the documented two-number version suffix is accepted. The `dnie` switch identifies DNIe by the verified TSL anchor certificate subject containing `DNIE`, not by untrusted text in the leaf.
@@ -123,7 +125,7 @@ Publish the Laravel config with `php artisan vendor:publish --tag=eidas-cert-aut
         'soft_fail_revocation' => false,
     ],
     'signature' => [
-        'countries' => ['ES'], 'qualified_required' => true,
+        'usage' => 'signature', 'countries' => ['ES'], 'qualified_required' => true,
         'person_types' => ['natural', 'representative'], 'dnie' => false,
         'soft_fail_revocation' => false,
     ],
@@ -135,7 +137,7 @@ Publish the Laravel config with `php artisan vendor:publish --tag=eidas-cert-aut
 ],
 ```
 
-A qualified profile requires QcCompliance and applies the TSL's `NotQualified`/`QCForLegalPerson` criteria. `person_types` can include `natural`, `representative`, and `legal` (an entity seal with an organization identifier). A `legal` certificate still needs authentication usage. Set `authentication_policies` on a profile as a country-to-OID map, for example `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; omission means no OID restriction. `soft_fail_revocation` defaults to `false` per profile. Omitted fields inherit the global defaults; `default` is available without configuration, accepts ES and DNIe, and does not require qualification. Unknown names raise `InvalidArgumentException`. Distinct rejection reasons include `no_authentication_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch`, and `person_type_not_allowed`.
+A qualified profile requires QcCompliance and applies the TSL's `NotQualified`/`QCForLegalPerson` criteria. `person_types` can include `natural`, `representative`, and `legal` (an entity seal with an organization identifier). A `legal` certificate still needs the configured usage. Set `authentication_policies` on a profile as a country-to-OID map, for example `'authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']]`; omission means no OID restriction. `soft_fail_revocation` defaults to `false` per profile. Omitted fields inherit the global defaults; `default` is available without configuration, accepts ES and DNIe, and does not require qualification. Unknown names raise `InvalidArgumentException`. Distinct rejection reasons include `no_authentication_usage`, `no_signature_usage`, `dnie_disabled_for_profile`, `qualified_required`, `authentication_policy_mismatch`, and `person_type_not_allowed`.
 
 ```php
 // Laravel route using the eidas.cert alias registered by the provider:
