@@ -103,6 +103,60 @@ final class CertificateValidatorTest extends TestCase
         self::assertSame('untrusted', $validator->validate($pki->issue($subject, null, 'client')['pem'])->reason);
     }
 
+    public function testSignatureUsageAcceptsSigningKeyUsageWithCompatibleExtendedUsage(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Test root', 'C' => 'ES'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $transport = new FakeTransport();
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker($transport, new InMemoryRevocationCache()), new Options(profiles: ['signature' => ['usage' => 'signature']]));
+        $subject = ['CN' => 'Signer', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
+
+        foreach (['sign_no_eku', 'sign_email', 'sign_document', 'sign_any', 'sign_fnmt'] as $certificateProfile) {
+            $client = $pki->issue($subject, $root, $certificateProfile);
+            $transport->respond('http://ocsp.example.test/response', $pki->ocspResponse($client['pem'], $root));
+            $result = $validator->validate($client['pem'], profile: 'signature');
+            self::assertTrue($result->valid, $certificateProfile . ': ' . $result->reason);
+            self::assertSame('signature', $result->profile);
+        }
+    }
+
+    public function testSignatureUsageRejectsEncryptionAndIncompatibleExtendedUsage(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Test root', 'C' => 'ES'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(profiles: ['signature' => ['usage' => 'signature']]));
+        $subject = ['CN' => 'Signer', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
+
+        foreach (['encrypt_only', 'sign_wrong_eku'] as $certificateProfile) {
+            $result = $validator->validate($pki->issue($subject, $root, $certificateProfile)['pem'], profile: 'signature');
+            self::assertSame('no_signature_usage', $result->reason, $certificateProfile);
+        }
+    }
+
+    public function testAuthenticationUsageRemainsTheDefaultForNamedProfiles(): void
+    {
+        $pki = new TestPki();
+        $root = $pki->issue(['CN' => 'Test root', 'C' => 'ES'], profile: 'ca');
+        $store = new TrustStore($this->dir . '/trust');
+        $store->publish([hash('sha256', TestPki::der($root['pem'])) => ['pem' => $root['pem'], 'country' => 'ES', 'service' => 'http://uri.etsi.org/TrstSvc/Svctype/CA/QC', 'fore_signatures' => true]]);
+        $validator = new CertificateValidator(new CertificateParser(), $store, new RevocationChecker(new FakeTransport(), new InMemoryRevocationCache()), new Options(profiles: ['login' => []]));
+        $subject = ['CN' => 'Signer', 'serialNumber' => 'IDCES-00000000T', 'C' => 'ES'];
+
+        self::assertSame('no_authentication_usage', $validator->validate($pki->issue($subject, $root, 'sign_email')['pem'], profile: 'login')->reason);
+        self::assertSame('no_authentication_usage', $validator->validate($pki->issue($subject, $root, 'sign_no_eku')['pem'])->reason);
+    }
+
+    public function testProfileRejectsNonStringUsageAsConfigurationError(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid eIDAS profile setting: usage');
+        new Options(profiles: ['signature' => ['usage' => false]]);
+    }
+
     public function testFallsBackToSignedCrlAndCachesVerifiedStatus(): void
     {
         $pki = new TestPki();

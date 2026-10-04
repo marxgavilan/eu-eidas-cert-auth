@@ -59,7 +59,13 @@ final class CertificateValidator
         if ($issuer === null) {
             return ValidationResult::reject('untrusted', $parsed, $profile);
         }
-        if ($parsed->extendedKeyUsage !== null ? ! preg_match('/(?:^|,\s*)(?:TLS Web Client Authentication|clientAuth)(?:,|$)/', $parsed->extendedKeyUsage) : ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature'))) {
+        if ($policy->usage === 'signature') {
+            $signingKeyUsage = $parsed->keyUsage !== null && preg_match('/(?:^|,\s*)(?:Digital Signature|Non Repudiation|Content Commitment)(?:,|$)/i', $parsed->keyUsage);
+            $signingExtendedUsage = $parsed->extendedKeyUsage === null || preg_match('/(?:^|,\s*)(?:E-mail Protection|emailProtection|1\.3\.6\.1\.5\.5\.7\.3\.4|Document Signing|documentSigning|1\.3\.6\.1\.5\.5\.7\.3\.36|Any Extended Key Usage|anyExtendedKeyUsage|2\.5\.29\.37\.0|TLS Web Client Authentication|clientAuth|1\.3\.6\.1\.5\.5\.7\.3\.2)(?:,|$)/i', $parsed->extendedKeyUsage);
+            if (! $signingKeyUsage || ! $signingExtendedUsage) {
+                return ValidationResult::reject('no_signature_usage', $parsed, $profile);
+            }
+        } elseif ($parsed->extendedKeyUsage !== null ? ! preg_match('/(?:^|,\s*)(?:TLS Web Client Authentication|clientAuth)(?:,|$)/', $parsed->extendedKeyUsage) : ($parsed->keyUsage === null || ! str_contains($parsed->keyUsage, 'Digital Signature'))) {
             return ValidationResult::reject('no_authentication_usage', $parsed, $profile);
         }
         $anchorMetadata = $this->store->manifest()[$issuer['anchor']] ?? [];

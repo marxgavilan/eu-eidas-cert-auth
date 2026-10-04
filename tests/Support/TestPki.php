@@ -35,6 +35,18 @@ final class TestPki
         $text .= "[client_fake_qc]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n1.3.6.1.5.5.7.1.3=DER:30:0a:04:08:06:06:04:00:8e:46:01:01\n";
         $text .= "[client_no_qc]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nauthorityInfoAccess=OCSP;URI:http://ocsp.example.test/response\n";
         $text .= "[client_no_auth]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,nonRepudiation\nextendedKeyUsage=emailProtection\n";
+        foreach ([
+            'sign_no_eku' => ['nonRepudiation', null],
+            'sign_email' => ['nonRepudiation', 'emailProtection'],
+            'sign_document' => ['digitalSignature', '1.3.6.1.5.5.7.3.36'],
+            'sign_any' => ['digitalSignature', 'anyExtendedKeyUsage'],
+            'sign_fnmt' => ['digitalSignature,nonRepudiation', 'clientAuth,emailProtection'],
+            'sign_wrong_eku' => ['digitalSignature', 'serverAuth'],
+            'encrypt_only' => ['keyEncipherment', 'emailProtection'],
+        ] as $profileName => [$keyUsage, $extendedKeyUsage]) {
+            $eku = $extendedKeyUsage === null ? '' : "extendedKeyUsage={$extendedKeyUsage}\n";
+            $text .= "[{$profileName}]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,{$keyUsage}\n{$eku}authorityInfoAccess=OCSP;URI:http://ocsp.example.test/response\n";
+        }
         $manyAiaUrls = implode(',', array_map(static fn(int $number): string => "caIssuers;URI:http://attacker{$number}.example.test/issuer.crt", range(1, 15)));
         $text .= "[aia_many_self]\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nauthorityInfoAccess={$manyAiaUrls}\n";
         foreach (['dnie_auth' => 'extendedKeyUsage=clientAuth', 'dnie_no_eku' => '', 'dnie_wrong_eku' => 'extendedKeyUsage=emailProtection', 'dnie_wrong_policy' => 'extendedKeyUsage=clientAuth', 'dnie_bad_ku' => 'extendedKeyUsage=clientAuth', 'dnie_versioned' => 'extendedKeyUsage=clientAuth'] as $profileName => $eku) {

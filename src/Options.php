@@ -98,12 +98,15 @@ final readonly class Options
         if (! is_array($settings)) {
             throw new InvalidArgumentException("Invalid eIDAS validation profile: {$name}");
         }
-        $allowed = ['countries', 'qualified_required', 'person_types', 'dnie', 'authentication_policies', 'soft_fail_revocation', 'aia_fetch'];
+        $allowed = ['countries', 'qualified_required', 'person_types', 'dnie', 'authentication_policies', 'soft_fail_revocation', 'aia_fetch', 'usage'];
         foreach ($settings as $key => $value) {
             if (! in_array($key, $allowed, true)) {
                 throw new InvalidArgumentException("Unknown eIDAS profile setting: {$key}");
             }
             if (in_array($key, ['qualified_required', 'dnie', 'soft_fail_revocation', 'aia_fetch'], true) && ! is_bool($value)) {
+                throw new InvalidArgumentException("Invalid eIDAS profile setting: {$key}");
+            }
+            if ($key === 'usage' && ! is_string($value)) {
                 throw new InvalidArgumentException("Invalid eIDAS profile setting: {$key}");
             }
         }
@@ -121,6 +124,7 @@ final readonly class Options
             authenticationPolicies: array_filter($settings['authentication_policies'] ?? $this->authenticationPolicies),
             softFailRevocation: $settings['soft_fail_revocation'] ?? $this->softFailRevocation,
             aiaFetch: $settings['aia_fetch'] ?? $this->aiaFetch,
+            usage: $settings['usage'] ?? 'authentication',
         );
     }
 }
