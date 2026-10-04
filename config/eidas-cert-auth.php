@@ -18,7 +18,7 @@ return [
     'aia_cache_store' => env('EIDAS_AIA_CACHE_STORE'),
     'require_qualified' => (bool) env('EIDAS_REQUIRE_QUALIFIED', false),
     'authentication_policies' => Options::DEFAULT_AUTHENTICATION_POLICIES,
-    // Each named profile may override countries, qualified_required, person_types,
+    // Each named profile may override usage (authentication or signature), countries, qualified_required, person_types,
     // dnie, authentication_policies (country => OIDs), soft_fail_revocation, and aia_fetch.
     // EIDAS_PROFILES may contain a JSON object with the same structure.
     // Parsing is deferred until Options is resolved, so invalid JSON cannot stop app boot.

@@ -82,7 +82,7 @@ final class LaravelWiringTest extends TestCase
             'eidas-cert-auth.maximum_store_age_seconds' => 12345,
             'eidas-cert-auth.intermediates' => ['test-intermediate'],
             'eidas-cert-auth.authentication_policies' => ['ES' => ['2.16.724.1.2.2.2.4']],
-            'eidas-cert-auth.profiles' => ['signature' => ['qualified_required' => true, 'dnie' => false]],
+            'eidas-cert-auth.profiles' => ['signature' => ['qualified_required' => true, 'dnie' => false, 'usage' => 'signature']],
         ];
         $config = new class ($values) {
             /** @param array<string, mixed> $values */
@@ -125,6 +125,8 @@ final class LaravelWiringTest extends TestCase
         self::assertSame(['ES' => ['2.16.724.1.2.2.2.4']], $options->authenticationPolicies);
         self::assertTrue($options->profile('signature')->qualifiedRequired);
         self::assertFalse($options->profile('signature')->dnie);
+        self::assertSame('signature', $options->profile('signature')->usage);
+        self::assertSame('authentication', $options->profile()->usage);
         $validator = $bindings[CertificateValidator::class]($app);
         self::assertInstanceOf(CertificateValidator::class, $validator);
         self::assertSame(['test-intermediate'], (new \ReflectionProperty($validator, 'intermediates'))->getValue($validator));

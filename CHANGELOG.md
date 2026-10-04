@@ -2,6 +2,16 @@
 
 All notable changes are recorded here. This project follows semantic versioning and [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-10-04
+
+### Added
+
+- Validation profiles can set `usage: signature` to accept signing key usage with compatible EKUs, including signing-only certificates. Certificates lacking signing usage return `no_signature_usage`.
+
+### Compatibility
+
+- Existing and omitted profile usage remains `authentication`, with the same certificate acceptance rule and `no_authentication_usage` reason.
+
 ## [0.1.1] - 2026-09-29
 
 ### Changed

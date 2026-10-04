@@ -21,6 +21,7 @@ final readonly class ValidationProfile
         public array $authenticationPolicies = [],
         public bool $softFailRevocation = false,
         public bool $aiaFetch = true,
+        public string $usage = 'authentication',
     ) {
         if ($countries === [] || ! array_is_list($countries) || count(array_unique($countries)) !== count($countries)) {
             throw new InvalidArgumentException('Invalid profile countries.');
@@ -47,6 +48,9 @@ final readonly class ValidationProfile
                     throw new InvalidArgumentException('Invalid profile authentication policy OID.');
                 }
             }
+        }
+        if (! in_array($usage, ['authentication', 'signature'], true)) {
+            throw new InvalidArgumentException('Invalid profile usage.');
         }
     }
 }
